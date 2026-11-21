@@ -64,25 +64,39 @@ jobs:
           compression-level: 0
 
   windows:
-    runs-on: windows-latest
+    name: Windows (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
       - name: Test
-        run: ./bin/test.ps1
+        run: ./bin/test.ps1 -Target ${{ matrix.target }}
       - name: Build
-        run: ./bin/build.ps1
+        run: ./bin/build.ps1 -Target ${{ matrix.target }}
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
-          Compress-Archive -Path build/saiki.exe, README.md, LICENSE -DestinationPath release/saiki-windows-x86_64.zip
-          $hash = (Get-FileHash release/saiki-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  saiki-windows-x86_64.zip" | Set-Content release/SHA256SUMS-windows -Encoding ascii
+          $archive = "saiki-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path build/saiki.exe, README.md, LICENSE -DestinationPath "release/$archive"
+          $hash = (Get-FileHash "release/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content release/SHA256SUMS-windows-${{ matrix.arch }} -Encoding ascii
       - uses: actions/upload-artifact@v6
         with:
-          name: saiki-windows-x86_64
+          name: saiki-windows-${{ matrix.arch }}
           path: release/
           if-no-files-found: error
           compression-level: 0
@@ -104,7 +118,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cat SHA256SUMS-windows >> SHA256SUMS
+          cat SHA256SUMS-windows-* >> SHA256SUMS
           sha256sum --check SHA256SUMS
           package=$(head -n 1 SHA256SUMS | cut -d ' ' -f 3)
           if gh release view "$GITHUB_REF_NAME" --json assets,isDraft > existing-release.json 2>/dev/null; then
@@ -112,9 +126,10 @@ jobs:
               .isDraft == false and
               ([.assets[].name] | index($package)) != null and
               ([.assets[].name] | index("saiki-windows-x86_64.zip")) != null and
+              ([.assets[].name] | index("saiki-windows-arm64.zip")) != null and
               ([.assets[].name] | index("SHA256SUMS")) != null
             ' existing-release.json > /dev/null
           else
-            gh release create "$GITHUB_REF_NAME" saiki-*-x86_64.pkg.tar.zst saiki-windows-x86_64.zip SHA256SUMS \
+            gh release create "$GITHUB_REF_NAME" saiki-*-x86_64.pkg.tar.zst saiki-windows-*.zip SHA256SUMS \
               --verify-tag --title "Saiki $GITHUB_REF_NAME" --generate-notes
           fi

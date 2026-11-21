@@ -12,7 +12,7 @@ Download the x86_64 package from [GitHub Releases](https://github.com/pruven/sai
 
 ## Install on Windows
 
-Download `saiki-windows-x86_64.zip` from [GitHub Releases](https://github.com/pruven/saiki/releases/latest), extract it, and run `saiki.exe`. Windows 10 version 1607 or newer and a Direct3D 11 capable GPU are required. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
+Download `saiki-windows-x86_64.zip` for Intel/AMD PCs or `saiki-windows-arm64.zip` for ARM PCs from [GitHub Releases](https://github.com/pruven/saiki/releases/latest), extract it, and run `saiki.exe`. The x64 build requires Windows 10 version 1607 or newer; the ARM64 build requires Windows 11. Both require a Direct3D 11 capable GPU. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
 
 ## Run from source
 
@@ -22,6 +22,16 @@ On Windows, install [Rust](https://www.rust-lang.org/tools/install) with the MSV
 .\bin\build.ps1
 .\build\saiki.exe
 ```
+
+For a native ARM64 build, select the ARM64 MSVC Rust toolchain and install the Visual Studio **MSVC ARM64/ARM64EC build tools** component along with the Windows SDK. On an ARM PC, run:
+
+```powershell
+rustup default stable-aarch64-pc-windows-msvc
+.\bin\build.ps1 -Target aarch64-pc-windows-msvc
+.\bin\test.ps1 -Target aarch64-pc-windows-msvc
+```
+
+The same build target also supports cross-compiling from an x64 Windows PC with `rustup target add aarch64-pc-windows-msvc`; run the resulting executable and tests on an ARM PC. Both builds write `build\saiki.exe`. The build script also locates the SDK's x64 shader compiler for GPUI when it is not on PATH.
 
 Use `.\bin\test.ps1` to run tests and `.\build\saiki.exe --demo` to preview the overlay. Settings are saved in `%APPDATA%\saiki`. The tray menu provides Open, Start, Pause, and Quit; launching Saiki again opens the existing session, and `.\build\saiki.exe --quit` exits it.
 
@@ -67,4 +77,4 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests both platforms and publishes the x86_64 Arch package and Windows ZIP with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests Linux, runs Windows tests on native x64 and ARM64 runners and publishes the x86_64 Arch package and separate Windows x64 and ARM64 ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
