@@ -285,33 +285,13 @@ fn open(
     delay: Duration,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
-    #[cfg(target_os = "linux")]
-    let bounds = Bounds::new(
-        point(px(0.), px(0.)),
-        size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)),
-    );
-    #[cfg(target_os = "windows")]
-    let bounds = {
-        let display = cx
-            .primary_display()
-            .ok_or_else(|| anyhow::anyhow!("no display available"))?;
-        let screen = display.visible_bounds();
-        let x = match position.horizontal() {
-            -1 => screen.origin.x,
-            1 => screen.origin.x + screen.size.width - px(SURFACE_WIDTH),
-            _ => screen.origin.x + (screen.size.width - px(SURFACE_WIDTH)) / 2.,
-        };
-        let y = if position.is_bottom() {
-            screen.origin.y + screen.size.height - px(SURFACE_HEIGHT)
-        } else {
-            screen.origin.y
-        };
-        Bounds::new(point(x, y), size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)))
-    };
     let handle = cx.open_window(
         WindowOptions {
             titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)),
+            ))),
             #[cfg(target_os = "windows")]
             kind: WindowKind::PopUp,
             // Keep the native window hidden until its input and activation styles are set.
@@ -342,7 +322,9 @@ fn open(
         },
     )?;
     #[cfg(target_os = "windows")]
-    if let Err(error) = handle.update(cx, |_, window, _| configure_windows_overlay(window))? {
+    if let Err(error) = handle.update(cx, |_, window, _| {
+        configure_windows_overlay(window, position)
+    })? {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
         return Err(error);
     }
@@ -416,12 +398,43 @@ fn card_view(content: &Content) -> Div {
         .child(keys)
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_overlay_bounds(
+    position: Position,
+    work_area: Bounds<gpui::DevicePixels>,
+    scale: f32,
+) -> Bounds<gpui::DevicePixels> {
+    let surface = size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)).to_device_pixels(scale);
+    let remaining = work_area.size - surface;
+    let x = match position.horizontal() {
+        -1 => work_area.origin.x,
+        1 => work_area.origin.x + remaining.width,
+        _ => work_area.origin.x + remaining.width / 2,
+    };
+    let y = if position.is_bottom() {
+        work_area.origin.y + remaining.height
+    } else {
+        work_area.origin.y
+    };
+    Bounds::new(point(x, y), surface)
+}
+
 #[cfg(target_os = "windows")]
-fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
+fn configure_windows_overlay(window: &Window, position: Position) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
-        Foundation::{COLORREF, ERROR_SUCCESS, GetLastError, HWND, SetLastError},
-        UI::WindowsAndMessaging::*,
+        Foundation::{COLORREF, ERROR_SUCCESS, GetLastError, HWND, POINT, SetLastError},
+        Graphics::{
+            Dwm::{
+                DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY,
+                DwmSetWindowAttribute,
+            },
+            Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint},
+        },
+        UI::{
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
+            WindowsAndMessaging::*,
+        },
     };
     let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)
         .map_err(|error| anyhow::anyhow!("get overlay window handle: {error}"))?
@@ -431,6 +444,31 @@ fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
     };
     let hwnd = HWND(handle.hwnd.get() as *mut _);
     unsafe {
+        use gpui::DevicePixels;
+        // The hidden GPUI window still has its default bounds. Calculate screen
+        // coordinates using the primary monitor's work area and DPI.
+        let monitor = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY);
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        GetMonitorInfoW(monitor, &mut info).ok()?;
+        let mut dpi_x = 0;
+        let mut dpi_y = 0;
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y)?;
+        let work = info.rcWork;
+        let bounds = windows_overlay_bounds(
+            position,
+            Bounds::new(
+                point(DevicePixels(work.left), DevicePixels(work.top)),
+                size(
+                    DevicePixels(work.right - work.left),
+                    DevicePixels(work.bottom - work.top),
+                ),
+            ),
+            dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+        );
+
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         // A zero previous style is valid, so clear last-error before checking the result.
         SetLastError(ERROR_SUCCESS);
@@ -447,15 +485,37 @@ fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
             return Err(windows::core::Error::from_win32().into());
         }
         SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
-        SetWindowPos(
+        // Suppress the OS frame and shadow around the transparent drawing surface.
+        DwmSetWindowAttribute(
             hwnd,
-            Some(HWND_TOPMOST),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            DWMWA_NCRENDERING_POLICY,
+            std::ptr::from_ref(&DWMNCRP_DISABLED).cast(),
+            size_of_val(&DWMNCRP_DISABLED) as u32,
         )?;
+        // This additional border setting is available on Windows 11.
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            std::ptr::from_ref(&DWMWA_COLOR_NONE).cast(),
+            size_of_val(&DWMWA_COLOR_NONE) as u32,
+        );
+        let place = |flags| {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                bounds.origin.x.0,
+                bounds.origin.y.0,
+                bounds.size.width.0,
+                bounds.size.height.0,
+                SWP_NOACTIVATE | flags,
+            )
+        };
+        // GPUI handles a DPI transition by applying Windows' suggested rectangle.
+        // Let that happen while hidden, then apply the intended bounds again.
+        if GetDpiForWindow(hwnd) != dpi_x {
+            place(SWP_FRAMECHANGED)?;
+        }
+        place(SWP_FRAMECHANGED | SWP_SHOWWINDOW)?;
     }
     Ok(())
 }
@@ -465,6 +525,32 @@ mod tests {
     use super::*;
 
     const TEST_DELAY: Duration = Duration::from_millis(1500);
+
+    #[test]
+    fn windows_positions_use_the_scaled_surface_and_monitor_work_area() {
+        use gpui::DevicePixels;
+
+        let work_area = Bounds::new(
+            point(DevicePixels(64), DevicePixels(32)),
+            size(DevicePixels(1856), DevicePixels(1000)),
+        );
+        for (position, x, y) in [
+            (Position::TopLeft, 64, 32),
+            (Position::TopCenter, 690, 32),
+            (Position::TopRight, 1317, 32),
+            (Position::BottomLeft, 64, 612),
+            (Position::BottomCenter, 690, 612),
+            (Position::BottomRight, 1317, 612),
+        ] {
+            let bounds = windows_overlay_bounds(position, work_area, 1.5);
+            assert_eq!(
+                bounds.origin,
+                point(DevicePixels(x), DevicePixels(y)),
+                "{position:?}"
+            );
+            assert_eq!(bounds.size, size(DevicePixels(603), DevicePixels(420)));
+        }
+    }
 
     #[test]
     fn groups_letters_and_keeps_shortcuts_separate() {
