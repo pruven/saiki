@@ -71,6 +71,11 @@ impl Controls {
 
     pub fn show(cx: &mut App, state: &Entity<Self>) -> anyhow::Result<WindowHandle<Self>> {
         let focus = state.read(cx).focus.clone();
+        let height = if cfg!(target_os = "linux") {
+            380.
+        } else {
+            420.
+        };
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
@@ -79,10 +84,13 @@ impl Controls {
                 }),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(440.), px(420.)),
+                    size(px(440.), px(height)),
                     cx,
                 ))),
+                #[cfg(target_os = "windows")]
                 window_min_size: Some(size(px(360.), px(405.))),
+                #[cfg(target_os = "linux")]
+                is_resizable: false,
                 app_id: Some("saiki".into()),
                 ..Default::default()
             },
@@ -358,7 +366,116 @@ impl Render for Controls {
             "Show keypresses over the other apps on your screen."
         };
 
-        div()
+        let chrome = div()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child(keyboard_mark())
+                    .child("Saiki"),
+            )
+            .child(chrome_button("minimize", "−", |_, window, _| {
+                window.minimize_window()
+            }))
+            .child(chrome_button("close", "×", |_, window, _| {
+                window.remove_window()
+            }));
+
+        let body = div()
+            .w_full()
+            .max_w(px(440.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(23.))
+                            .line_height(px(30.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(self.text(status)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .text_color(rgb(MUTED))
+                            .children(
+                                self.text(detail)
+                                    .lines()
+                                    .map(|line| div().child(line.to_owned()))
+                                    .collect::<Vec<_>>(),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("shortcuts-only")
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.shortcuts_only = !this.shortcuts_only;
+                        if this.shortcuts_only {
+                            this.clear_overlay(cx);
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(16.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(rgba(0xffffff39))
+                            .when(self.shortcuts_only, |el| {
+                                el.bg(rgb(0xdadbea)).text_color(rgb(0x1b1b1b)).child("✓")
+                            }),
+                    )
+                    .child(self.text("Only show Ctrl, Alt or Super shortcuts")),
+            )
+            .child(self.position_picker(cx))
+            .child(self.fade_delay_control(cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        button(
+                            "capture",
+                            self.text(if self.capture.is_some() {
+                                "Pause capture"
+                            } else {
+                                "Start capture"
+                            }),
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle(cx))),
+                    )
+                    .child(
+                        button("preview", self.text("Preview"), false)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.preview(cx))),
+                    ),
+            );
+
+        let window = div()
             .track_focus(&self.focus)
             .key_context("Saiki")
             .on_action(cx.listener(|this, _: &ToggleCapture, _, cx| this.toggle(cx)))
@@ -375,132 +492,49 @@ impl Render for Controls {
             }))
             .on_action(|_: &Quit, _, cx| cx.quit())
             .size_full()
-            .bg(rgb(0x1b1b1b))
             .text_color(rgb(TEXT))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div().w_full().max_w(px(480.)).px(px(20.)).child(
+            .flex();
+
+        #[cfg(target_os = "linux")]
+        {
+            window
+                .bg(rgb(SURFACE))
+                .flex_col()
+                // Keep window buttons at the top when the compositor tiles Saiki.
+                .child(div().flex_shrink_0().px(px(17.)).py(px(12.)).child(chrome))
+                .child(
                     div()
-                        .rounded(px(18.))
-                        .bg(rgb(SURFACE))
-                        .border_1()
-                        .border_color(rgba(EDGE))
-                        .p(px(17.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(5.))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .on_mouse_down(MouseButton::Left, |_, window, _| {
-                                            window.start_window_move()
-                                        })
-                                        .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
-                                        .child(keyboard_mark())
-                                        .child("Saiki"),
-                                )
-                                .child(chrome_button("minimize", "−", |_, window, _| {
-                                    window.minimize_window()
-                                }))
-                                .child(chrome_button("close", "×", |_, window, _| {
-                                    window.remove_window()
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .child(
-                                    div()
-                                        .text_size(px(23.))
-                                        .line_height(px(30.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(self.text(status)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .line_height(px(18.))
-                                        .text_color(rgb(MUTED))
-                                        .children(
-                                            self.text(detail)
-                                                .lines()
-                                                .map(|line| div().child(line.to_owned()))
-                                                .collect::<Vec<_>>(),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("shortcuts-only")
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .cursor_pointer()
-                                .text_size(px(13.))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.shortcuts_only = !this.shortcuts_only;
-                                    if this.shortcuts_only {
-                                        this.clear_overlay(cx);
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size(px(16.))
-                                        .rounded(px(4.))
-                                        .border_1()
-                                        .border_color(rgba(0xffffff39))
-                                        .when(self.shortcuts_only, |el| {
-                                            el.bg(rgb(0xdadbea))
-                                                .text_color(rgb(0x1b1b1b))
-                                                .child("✓")
-                                        }),
-                                )
-                                .child(self.text("Only show Ctrl, Alt or Super shortcuts")),
-                        )
-                        .child(self.position_picker(cx))
-                        .child(self.fade_delay_control(cx))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(7.))
-                                .child(
-                                    button(
-                                        "capture",
-                                        self.text(if self.capture.is_some() {
-                                            "Pause capture"
-                                        } else {
-                                            "Start capture"
-                                        }),
-                                        true,
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _: &ClickEvent, _, cx| this.toggle(cx)),
-                                    ),
-                                )
-                                .child(button("preview", self.text("Preview"), false).on_click(
-                                    cx.listener(|this, _: &ClickEvent, _, cx| this.preview(cx)),
-                                )),
-                        ),
-                ),
-            )
+                        .id("controls-body")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .px(px(17.))
+                        .pb(px(17.))
+                        .child(body),
+                )
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            window
+                .bg(rgb(0x1b1b1b))
+                .items_center()
+                .justify_center()
+                .child(
+                    div().w_full().max_w(px(480.)).px(px(20.)).child(
+                        div()
+                            .rounded(px(18.))
+                            .bg(rgb(SURFACE))
+                            .border_1()
+                            .border_color(rgba(EDGE))
+                            .p(px(17.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.))
+                            .child(chrome)
+                            .child(body),
+                    ),
+                )
+        }
     }
 }
 
