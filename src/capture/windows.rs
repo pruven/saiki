@@ -100,6 +100,10 @@ impl Keyboard {
             }
             let _ = ready.try_send(Ok(()));
             while GetMessageW(&mut message, None, 0, 0).0 > 0 {
+                // Timer messages also wake us if posting WM_QUIT during Drop failed.
+                if _registration.0.lock().unwrap().stopped {
+                    break;
+                }
                 if message.message == WM_TIMER && !session_active() {
                     CAPTURE.with(|state| {
                         if let Some(state) = state.borrow().as_ref() {
