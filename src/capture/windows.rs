@@ -3,10 +3,7 @@ use async_channel::{Receiver, Sender};
 use std::{
     cell::RefCell,
     future::Future,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     thread,
 };
 use windows::Win32::{
@@ -30,21 +27,42 @@ struct HookState {
 
 pub struct Keyboard {
     receiver: Receiver<Result<Vec<Stroke>, CaptureError>>,
-    thread_id: u32,
-    stop: Arc<AtomicBool>,
-    thread: Option<thread::JoinHandle<()>>,
+    worker: Arc<Mutex<Worker>>,
+}
+
+#[derive(Default)]
+struct Worker {
+    thread_id: Option<u32>,
+    stopped: bool,
+}
+
+// Clear the thread ID on every exit path while keeping shutdown synchronized with Drop.
+struct WorkerQueue(Arc<Mutex<Worker>>);
+
+impl Drop for WorkerQueue {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().thread_id = None;
+    }
 }
 
 impl Keyboard {
     pub async fn open() -> Result<Self, CaptureError> {
         let (sender, receiver) = async_channel::bounded(64);
         let (ready, started) = async_channel::bounded(1);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopping = stop.clone();
-        let thread = thread::spawn(move || unsafe {
+        let worker = Arc::new(Mutex::new(Worker::default()));
+        let registration = WorkerQueue(worker.clone());
+        thread::spawn(move || unsafe {
             // Create the message queue before publishing the thread ID.
             let mut message = MSG::default();
             let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+            let _registration = registration;
+            {
+                let mut worker = _registration.0.lock().unwrap();
+                if worker.stopped {
+                    return;
+                }
+                worker.thread_id = Some(GetCurrentThreadId());
+            }
             if !session_active() {
                 let _ = ready.try_send(Err(CaptureError::Session));
                 return;
@@ -80,20 +98,15 @@ impl Keyboard {
                 let _ = ready.try_send(Err(CaptureError::Session));
                 return;
             }
-            let _ = ready.try_send(Ok(GetCurrentThreadId()));
+            let _ = ready.try_send(Ok(()));
             while GetMessageW(&mut message, None, 0, 0).0 > 0 {
-                if message.message == WM_TIMER {
-                    if stopping.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if !session_active() {
-                        CAPTURE.with(|state| {
-                            if let Some(state) = state.borrow().as_ref() {
-                                let _ = state.sender.force_send(Err(CaptureError::Session));
-                            }
-                        });
-                        break;
-                    }
+                if message.message == WM_TIMER && !session_active() {
+                    CAPTURE.with(|state| {
+                        if let Some(state) = state.borrow().as_ref() {
+                            let _ = state.sender.force_send(Err(CaptureError::Session));
+                        }
+                    });
+                    break;
                 }
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
@@ -103,13 +116,8 @@ impl Keyboard {
             CAPTURE.with(|state| state.borrow_mut().take());
         });
         // Own the worker before awaiting startup so cancelling Start also stops the hook.
-        let mut keyboard = Self {
-            receiver,
-            thread_id: 0,
-            stop,
-            thread: Some(thread),
-        };
-        keyboard.thread_id = started.recv().await.map_err(|_| CaptureError::Device)??;
+        let keyboard = Self { receiver, worker };
+        started.recv().await.map_err(|_| CaptureError::Device)??;
         Ok(keyboard)
     }
 
@@ -123,13 +131,14 @@ impl Keyboard {
 
 impl Drop for Keyboard {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        unsafe {
-            let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+        let mut worker = self.worker.lock().unwrap();
+        worker.stopped = true;
+        if let Some(thread_id) = worker.thread_id {
+            unsafe {
+                let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        // The worker owns its hook and cleans it up on exit. Never join on the UI executor.
     }
 }
 

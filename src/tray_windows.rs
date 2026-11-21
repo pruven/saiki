@@ -4,7 +4,10 @@ use std::{thread, time::Duration};
 use windows::{
     Win32::{
         Foundation::*,
-        System::{LibraryLoader::GetModuleHandleW, Threading::CreateMutexW},
+        System::{
+            LibraryLoader::GetModuleHandleW,
+            Threading::{CreateMutexExW, SYNCHRONIZATION_SYNCHRONIZE},
+        },
         UI::{Shell::*, WindowsAndMessaging::*},
     },
     core::w,
@@ -31,7 +34,14 @@ impl Session {
     // None means the command was forwarded to the existing process.
     pub fn open(commands: Sender<Command>, quit: bool) -> Result<Option<Self>> {
         unsafe {
-            let mutex = CreateMutexW(None, false, w!("Local\\Saiki.Session"))?;
+            // We only keep the object alive; requesting full access can fail when
+            // the existing instance created the mutex at a higher integrity level.
+            let mutex = CreateMutexExW(
+                None,
+                w!("Local\\Saiki.Session"),
+                0,
+                SYNCHRONIZATION_SYNCHRONIZE.0,
+            )?;
             let existing = GetLastError() == ERROR_ALREADY_EXISTS;
             if existing || quit {
                 let _ = CloseHandle(mutex);
@@ -144,6 +154,12 @@ fn run(
             Some(instance.into()),
             Some((&mut *state as *mut State).cast()),
         )?;
+        // Allow only Saiki's pointer-free command message across the integrity boundary.
+        // This lets an unelevated invocation open or quit an elevated instance.
+        if let Err(error) = ChangeWindowMessageFilterEx(hwnd, COMMAND_MESSAGE, MSGFLT_ALLOW, None) {
+            let _ = DestroyWindow(hwnd);
+            return Err(error.into());
+        }
         if !Shell_NotifyIconW(NIM_ADD, &icon(hwnd)).as_bool() {
             let _ = DestroyWindow(hwnd);
             bail!("add notification area icon");

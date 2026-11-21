@@ -266,15 +266,9 @@ fn start_session(
     let mut controls = controls::Controls::show(cx, &state)?;
     cx.spawn(async move |cx| {
         let _session = session;
-        loop {
-            let command = futures_lite::future::or(async { incoming.recv().await.ok() }, async {
-                // Drain status notifications even when the native tray is idle.
-                let _ = statuses.recv().await;
-                None
-            })
-            .await;
+        while let Some(command) = next_windows_command(&incoming, &statuses).await {
             match command {
-                Some(Command::Show) => cx.update(|cx| {
+                Command::Show => cx.update(|cx| {
                     if controls
                         .update(cx, |_, window, _| window.activate_window())
                         .is_err()
@@ -285,20 +279,73 @@ fn start_session(
                         }
                     }
                 }),
-                Some(Command::Start) => {
-                    cx.update(|cx| state.update(cx, |state, cx| state.start(cx)))
-                }
-                Some(Command::Pause) => {
-                    cx.update(|cx| state.update(cx, |state, cx| state.stop(cx)))
-                }
-                Some(Command::Quit) => {
+                Command::Start => cx.update(|cx| state.update(cx, |state, cx| state.start(cx))),
+                Command::Pause => cx.update(|cx| state.update(cx, |state, cx| state.stop(cx))),
+                Command::Quit => {
                     cx.update(|cx| cx.quit());
                     break;
                 }
-                None => {}
             }
         }
     })
     .detach();
     Ok(())
+}
+
+// Status notifications are drained separately from command-channel closure. Once
+// statuses close, leave that branch pending so it cannot cause a busy loop.
+#[cfg(any(target_os = "windows", test))]
+async fn next_windows_command(
+    incoming: &Receiver<Command>,
+    statuses: &Receiver<&'static str>,
+) -> Option<Command> {
+    enum Event {
+        Input(Option<Command>),
+        Status,
+    }
+    loop {
+        let event =
+            futures_lite::future::or(async { Event::Input(incoming.recv().await.ok()) }, async {
+                match statuses.recv().await {
+                    Ok(_) => Event::Status,
+                    Err(_) => std::future::pending().await,
+                }
+            })
+            .await;
+        if let Event::Input(command) = event {
+            return command;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_commands_end_the_session_after_status_updates() {
+        futures_lite::future::block_on(async {
+            let (commands, incoming) = async_channel::unbounded();
+            let (status, statuses) = async_channel::unbounded();
+            status.try_send("Capture paused").unwrap();
+            drop(commands);
+            assert!(next_windows_command(&incoming, &statuses).await.is_none());
+        });
+    }
+
+    #[test]
+    fn closed_statuses_do_not_hide_commands_or_command_closure() {
+        futures_lite::future::block_on(async {
+            let (commands, incoming) = async_channel::unbounded();
+            let (status, statuses) = async_channel::unbounded();
+            drop(status);
+            commands.try_send(Command::Show).unwrap();
+            assert!(matches!(
+                next_windows_command(&incoming, &statuses).await,
+                Some(Command::Show)
+            ));
+            drop(commands);
+            assert!(next_windows_command(&incoming, &statuses).await.is_none());
+        });
+    }
 }
