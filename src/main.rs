@@ -1,24 +1,58 @@
+#![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
+
 mod capture;
 mod controls;
 mod overlay;
 mod settings;
+#[cfg(target_os = "linux")]
+mod tray;
+#[cfg(target_os = "windows")]
+#[path = "tray_windows.rs"]
 mod tray;
 
-use anyhow::{Context as _, Result, bail};
+#[cfg(target_os = "linux")]
+use anyhow::Context as _;
+use anyhow::{Result, bail};
 use async_channel::Receiver;
+#[cfg(target_os = "linux")]
 use futures_lite::future::{block_on, or};
 use gpui::{App, QuitMode};
+#[cfg(target_os = "linux")]
 use ksni::TrayMethods;
 use std::{cell::RefCell, env, process::ExitCode, rc::Rc};
 use tray::Command;
+#[cfg(target_os = "linux")]
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
+#[cfg(target_os = "linux")]
 use wayland_client::{Connection, Dispatch, QueueHandle, protocol::wl_registry::WlRegistry};
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "windows")]
+    let console = unsafe {
+        windows::Win32::System::Console::AttachConsole(
+            windows::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        )
+        .is_ok()
+    };
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("saiki: {err}");
+            #[cfg(target_os = "windows")]
+            if !console {
+                use windows::{
+                    Win32::UI::WindowsAndMessaging::*,
+                    core::{HSTRING, w},
+                };
+                unsafe {
+                    let _ = MessageBoxW(
+                        None,
+                        &HSTRING::from(err.to_string()),
+                        w!("Saiki"),
+                        MB_OK | MB_ICONERROR,
+                    );
+                }
+            }
             ExitCode::FAILURE
         }
     }
@@ -37,7 +71,7 @@ fn run() -> Result<()> {
         }
         [arg] if arg == "--help" || arg == "-h" => {
             println!(
-                "Saiki shows keypresses on Wayland.\n\nUsage: saiki [--demo | --quit | --help | --version]\n\n  --demo  Show a sample stack without opening keyboard devices.\n  --quit  Quit the running Saiki instance."
+                "Saiki shows keypresses on Wayland and Windows.\n\nUsage: saiki [--demo | --quit | --help | --version]\n\n  --demo  Show a sample stack without opening keyboard devices.\n  --quit  Quit the running Saiki instance."
             );
             return Ok(());
         }
@@ -45,6 +79,7 @@ fn run() -> Result<()> {
     };
 
     let (commands, incoming) = async_channel::unbounded();
+    #[cfg(target_os = "linux")]
     let session_bus = if demo {
         None
     } else {
@@ -63,24 +98,27 @@ fn run() -> Result<()> {
         }
     };
 
-    let connection = Connection::connect_to_env()
-        .map_err(|err| anyhow::anyhow!("connect to a Wayland session: {err}"))?;
-    let (globals, _) = registry_queue_init::<Registry>(&connection)?;
-    let layer_shell = globals.contents().with_list(|globals| {
-        globals
-            .iter()
-            .any(|global| global.interface == "zwlr_layer_shell_v1")
-    });
-    drop(connection);
+    #[cfg(target_os = "windows")]
+    let session = if demo {
+        None
+    } else {
+        match tray::Session::open(commands.clone(), quit)? {
+            Some(session) => Some(session),
+            None => return Ok(()),
+        }
+    };
+    let layer_shell = overlay_available()?;
     if demo && !layer_shell {
         bail!("{}", capture::CaptureError::Overlay.message());
     }
+    #[cfg(target_os = "linux")]
+    let session = session_bus;
 
     let result = Rc::new(RefCell::new(Ok(())));
     let startup = result.clone();
     gpui_platform::application().run(move |cx: &mut App| {
-        let opened = if let Some(bus) = session_bus {
-            start_session(cx, layer_shell, bus, commands, incoming)
+        let opened = if let Some(session) = session {
+            start_session(cx, layer_shell, session, commands, incoming)
         } else {
             cx.set_quit_mode(QuitMode::LastWindowClosed);
             overlay::show(
@@ -99,6 +137,7 @@ fn run() -> Result<()> {
     result.replace(Ok(()))
 }
 
+#[cfg(target_os = "linux")]
 fn start_session(
     cx: &mut App,
     layer_shell: bool,
@@ -180,8 +219,10 @@ fn start_session(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 struct Registry;
 
+#[cfg(target_os = "linux")]
 impl Dispatch<WlRegistry, GlobalListContents> for Registry {
     fn event(
         _: &mut Self,
@@ -192,4 +233,72 @@ impl Dispatch<WlRegistry, GlobalListContents> for Registry {
         _: &QueueHandle<Self>,
     ) {
     }
+}
+
+#[cfg(target_os = "linux")]
+fn overlay_available() -> Result<bool> {
+    let connection = Connection::connect_to_env()
+        .map_err(|err| anyhow::anyhow!("connect to a Wayland session: {err}"))?;
+    let (globals, _) = registry_queue_init::<Registry>(&connection)?;
+    Ok(globals.contents().with_list(|globals| {
+        globals
+            .iter()
+            .any(|global| global.interface == "zwlr_layer_shell_v1")
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn overlay_available() -> Result<bool> {
+    Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn start_session(
+    cx: &mut App,
+    available: bool,
+    session: tray::Session,
+    _commands: async_channel::Sender<Command>,
+    incoming: Receiver<Command>,
+) -> Result<()> {
+    cx.set_quit_mode(QuitMode::Explicit);
+    let (status_sender, statuses) = async_channel::bounded(1);
+    let state = controls::Controls::new(cx, available, status_sender);
+    let mut controls = controls::Controls::show(cx, &state)?;
+    cx.spawn(async move |cx| {
+        let _session = session;
+        loop {
+            let command = futures_lite::future::or(async { incoming.recv().await.ok() }, async {
+                // Drain status notifications even when the native tray is idle.
+                let _ = statuses.recv().await;
+                None
+            })
+            .await;
+            match command {
+                Some(Command::Show) => cx.update(|cx| {
+                    if controls
+                        .update(cx, |_, window, _| window.activate_window())
+                        .is_err()
+                    {
+                        match controls::Controls::show(cx, &state) {
+                            Ok(window) => controls = window,
+                            Err(error) => eprintln!("saiki: open controls: {error}"),
+                        }
+                    }
+                }),
+                Some(Command::Start) => {
+                    cx.update(|cx| state.update(cx, |state, cx| state.start(cx)))
+                }
+                Some(Command::Pause) => {
+                    cx.update(|cx| state.update(cx, |state, cx| state.stop(cx)))
+                }
+                Some(Command::Quit) => {
+                    cx.update(|cx| cx.quit());
+                    break;
+                }
+                None => {}
+            }
+        }
+    })
+    .detach();
+    Ok(())
 }

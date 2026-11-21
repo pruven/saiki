@@ -4394,8 +4394,10 @@ dependencies = [
  "input",
  "ksni",
  "libc",
+ "raw-window-handle",
  "serde_json",
  "wayland-client",
+ "windows 0.61.3",
  "xkbcommon 0.9.0",
  "zbus 5.19.0",
 ]
