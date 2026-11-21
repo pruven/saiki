@@ -1,0 +1,23 @@
+pkgname=saiki
+pkgver=0.4.0
+pkgrel=1
+pkgdesc='On-screen keypresses and keyboard shortcuts for Wayland'
+arch=('x86_64' 'aarch64')
+license=('MIT')
+depends=('wayland' 'vulkan-icd-loader' 'vulkan-driver' 'libinput' 'libxkbcommon' 'libxkbcommon-x11' 'libxcb' 'fontconfig' 'ttf-font' 'systemd-libs')
+makedepends=('rust' 'pkgconf')
+options=('!debug' '!lto')
+source=()
+sha256sums=()
+
+build() {
+    cd "$startdir/.."
+    ./bin/build
+}
+
+package() {
+    install -Dm755 "$startdir/../build/saiki" "$pkgdir/usr/bin/saiki"
+    install -Dm644 "$startdir/../LICENSE" "$pkgdir/usr/share/licenses/saiki/LICENSE"
+    install -Dm644 "$startdir/saiki.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/saiki.svg"
+    install -Dm644 "$startdir/saiki.desktop" "$pkgdir/usr/share/applications/saiki.desktop"
+}

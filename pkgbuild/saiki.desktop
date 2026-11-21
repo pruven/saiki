@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Saiki
+Name[da]=Saiki
+Comment=Show keystrokes on screen
+Comment[da]=Vis tastetryk på skærmen
+Exec=saiki
+Icon=saiki
+Terminal=false
+Categories=Utility;Accessibility;
+StartupWMClass=saiki
