@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check release versions
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          cargo_version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          pkgbuild_version = re.search(r"^pkgver=(\S+)$", Path("pkgbuild/PKGBUILD").read_text(), re.M)
+          if not pkgbuild_version or pkgbuild_version[1] != cargo_version:
+              raise SystemExit("Cargo.toml and PKGBUILD versions must match")
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{cargo_version}":
+              raise SystemExit(f"Expected release tag v{cargo_version}")
+          PY
+
+      - name: Test and build the Arch Linux package
+        run: |
+          mkdir -p "$RUNNER_TEMP/saiki-release"
+          docker run --rm \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/saiki-release,dst=/release" \
+            archlinux:base-devel bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed rust pkgconf wayland vulkan-intel \
+                libinput libxkbcommon-x11 libxcb fontconfig freetype2 ttf-liberation
+              useradd --create-home builder
+              mkdir /build
+              cp -a /source/. /build/
+              chown -R builder:builder /build
+              cd /build
+              runuser -u builder -- env JOBS=2 ./bin/test
+              cd pkgbuild
+              runuser -u builder -- env JOBS=2 makepkg --noconfirm
+              install -m644 saiki-*-x86_64.pkg.tar.zst /release/
+            '
+          cd "$RUNNER_TEMP/saiki-release"
+          sha256sum saiki-*-x86_64.pkg.tar.zst > SHA256SUMS
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: saiki-arch-x86_64
+          path: ${{ runner.temp }}/saiki-release/
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: saiki-arch-x86_64
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum --check SHA256SUMS
+          package=$(cut -d ' ' -f 3 SHA256SUMS)
+          if gh release view "$GITHUB_REF_NAME" --json assets,isDraft > existing-release.json 2>/dev/null; then
+            jq -e --arg package "$package" '
+              .isDraft == false and
+              ([.assets[].name] | index($package)) != null and
+              ([.assets[].name] | index("SHA256SUMS")) != null
+            ' existing-release.json > /dev/null
+          else
+            gh release create "$GITHUB_REF_NAME" "$package" SHA256SUMS \
+              --verify-tag --title "Saiki $GITHUB_REF_NAME" --generate-notes
+          fi

@@ -6,7 +6,11 @@ Saiki shows your keystrokes in a click-through overlay for demos and screen reco
 
 The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-archipelago/gpui-unofficial) for its Wayland layer-shell and click-through APIs.
 
-## Run
+## Install on Arch Linux
+
+Download the x86_64 package from [GitHub Releases](https://github.com/pruven/saiki/releases/latest) and install it with `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst` from the download directory. Open Saiki from your launcher or run `saiki`.
+
+## Run from source
 
 ```sh
 bin/build
@@ -46,3 +50,5 @@ Saiki reads Hyprland’s main keyboard layout and active group when you start ca
 Run `bin/install` to build and install the Arch package and launcher entry. Run `makepkg -f` inside `pkgbuild/` to build the package archive.
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
+
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests the code and publishes the x86_64 Arch package with a SHA-256 checksum. Running the workflow manually builds a downloadable artifact.
