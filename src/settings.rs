@@ -151,35 +151,12 @@ fn save(name: &str, value: &str) -> io::Result<()> {
     let directory = path.parent().expect("settings file has a parent directory");
     fs::create_dir_all(directory)?;
     let pending = directory.join(format!(".{name}-{}", std::process::id()));
-    let result = fs::write(&pending, format!("{value}\n")).and_then(|()| replace(&pending, &path));
+    let result =
+        fs::write(&pending, format!("{value}\n")).and_then(|()| fs::rename(&pending, &path));
     if result.is_err() {
         let _ = fs::remove_file(pending);
     }
     result
-}
-
-#[cfg(target_os = "linux")]
-fn replace(from: &std::path::Path, to: &std::path::Path) -> io::Result<()> {
-    fs::rename(from, to)
-}
-
-#[cfg(target_os = "windows")]
-fn replace(from: &std::path::Path, to: &std::path::Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::{
-        Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW},
-        core::PCWSTR,
-    };
-    let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    unsafe {
-        MoveFileExW(
-            PCWSTR(from.as_ptr()),
-            PCWSTR(to.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING,
-        )
-    }
-    .map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -201,7 +178,7 @@ mod tests {
         let pending = directory.join("pending");
         fs::write(&saved, "top-left\n").unwrap();
         fs::write(&pending, "bottom-right\n").unwrap();
-        replace(&pending, &saved).unwrap();
+        fs::rename(&pending, &saved).unwrap();
         assert_eq!(fs::read_to_string(&saved).unwrap(), "bottom-right\n");
         assert!(!pending.exists());
         fs::remove_dir_all(directory).unwrap();

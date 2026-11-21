@@ -23,7 +23,7 @@ On Windows, install [Rust](https://www.rust-lang.org/tools/install) with the MSV
 .\build\saiki.exe
 ```
 
-Use `.\bin\test.ps1` to run tests and `.\build\saiki.exe --demo` to preview the overlay. Settings are saved in `%APPDATA%\saiki`. The tray menu provides Open, Start, Pause, and Quit; launching Saiki again opens the existing session, and `saiki.exe --quit` exits it.
+Use `.\bin\test.ps1` to run tests and `.\build\saiki.exe --demo` to preview the overlay. Settings are saved in `%APPDATA%\saiki`. The tray menu provides Open, Start, Pause, and Quit; launching Saiki again opens the existing session, and `.\build\saiki.exe --quit` exits it.
 
 On Linux:
 

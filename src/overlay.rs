@@ -314,6 +314,9 @@ fn open(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             #[cfg(target_os = "windows")]
             kind: WindowKind::PopUp,
+            // Keep the native window hidden until its input and activation styles are set.
+            #[cfg(target_os = "windows")]
+            show: false,
             #[cfg(target_os = "linux")]
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: "saiki".into(),
@@ -417,7 +420,7 @@ fn card_view(content: &Content) -> Div {
 fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
-        Foundation::{COLORREF, HWND},
+        Foundation::{COLORREF, ERROR_SUCCESS, GetLastError, HWND, SetLastError},
         UI::WindowsAndMessaging::*,
     };
     let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)
@@ -429,7 +432,9 @@ fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
     let hwnd = HWND(handle.hwnd.get() as *mut _);
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        SetWindowLongW(
+        // A zero previous style is valid, so clear last-error before checking the result.
+        SetLastError(ERROR_SUCCESS);
+        let previous = SetWindowLongW(
             hwnd,
             GWL_EXSTYLE,
             ((style & !WS_EX_APPWINDOW.0)
@@ -438,6 +443,9 @@ fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
                 | WS_EX_NOACTIVATE.0
                 | WS_EX_TOOLWINDOW.0) as i32,
         );
+        if previous == 0 && GetLastError() != ERROR_SUCCESS {
+            return Err(windows::core::Error::from_win32().into());
+        }
         SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
         SetWindowPos(
             hwnd,
@@ -446,7 +454,7 @@ fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
         )?;
     }
     Ok(())
