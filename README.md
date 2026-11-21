@@ -2,7 +2,7 @@
 
 ![Saiki showing a typed word and two shortcuts](preview.png)
 
-Saiki shows your keystrokes in a click-through overlay for demos and screen recordings on Wayland. Rounded charcoal cards stack newest first along either screen edge and fade after the selected delay. Saiki renders them with [GPUI](https://gpui.rs/). The card style and motion take cues from [Hokum’s notifications](https://github.com/anomalyco/hokum).
+Saiki shows your keystrokes in a click-through overlay for demos and screen recordings on Wayland and Windows. Rounded charcoal cards stack newest first along either screen edge and fade after the selected delay. Saiki renders them with [GPUI](https://gpui.rs/). The card style and motion take cues from [Hokum’s notifications](https://github.com/anomalyco/hokum).
 
 The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-archipelago/gpui-unofficial) for its Wayland layer-shell and click-through APIs.
 
@@ -10,7 +10,22 @@ The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-ar
 
 Download the x86_64 package from [GitHub Releases](https://github.com/pruven/saiki/releases/latest) and install it with `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst` from the download directory. Open Saiki from your launcher or run `saiki`.
 
+## Install on Windows
+
+Download `saiki-windows-x86_64.zip` from [GitHub Releases](https://github.com/pruven/saiki/releases/latest), extract it, and run `saiki.exe`. Windows 10 version 1607 or newer and a Direct3D 11 capable GPU are required. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
+
 ## Run from source
+
+On Windows, install [Rust](https://www.rust-lang.org/tools/install) with the MSVC toolchain and Visual Studio Build Tools with **Desktop development with C++** and the Windows SDK. In PowerShell:
+
+```powershell
+.\bin\build.ps1
+.\build\saiki.exe
+```
+
+Use `.\bin\test.ps1` to run tests and `.\build\saiki.exe --demo` to preview the overlay. Settings are saved in `%APPDATA%\saiki`. The tray menu provides Open, Start, Pause, and Quit; launching Saiki again opens the existing session, and `saiki.exe --quit` exits it.
+
+On Linux:
 
 ```sh
 bin/build
@@ -35,16 +50,16 @@ Click **Preview** or run `build/saiki --demo` to show a sample stack.
 | Q | Quit |
 | ? | Show shortcuts |
 
-Capture starts paused and uses read-only access to the session’s keyboard devices. Cards stay in memory. Pause capture before typing sensitive text. Saiki pauses on lock events and desktop inactivity reported by logind.
+Capture starts paused. On Linux it uses read-only access to the session’s keyboard devices; on Windows it uses a passive keyboard hook. Cards stay in memory. Pause capture before typing sensitive text. Saiki pauses on lock events and desktop inactivity reported by logind on Linux, and when the Windows session locks, disconnects, or switches to a secure desktop. Start capture again after returning to the desktop.
 
-## Requirements
+## Linux requirements
 
 - A Wayland compositor with `zwlr_layer_shell_v1`, such as Hyprland, Sway, or niri.
 - A D-Bus session bus and a StatusNotifier-compatible tray for the tray icon.
 - Read access to the session keyboard’s `/dev/input/event*` device. Saiki reports missing access in its window.
 - A Vulkan driver, libinput, xkbcommon, and system fonts. On Arch, see [PKGBUILD](pkgbuild/PKGBUILD) for package names.
 
-Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope.
+Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout and displays the Windows key as Super.
 
 ## Package and test
 
@@ -52,4 +67,4 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests the code and publishes the x86_64 Arch package with a SHA-256 checksum. Running the workflow manually builds a downloadable artifact.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests both platforms and publishes the x86_64 Arch package and Windows ZIP with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.

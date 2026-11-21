@@ -1,5 +1,6 @@
 use crate::capture::Stroke;
 use crate::settings::Position;
+#[cfg(target_os = "linux")]
 use gpui::layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::prelude::*;
 use gpui::{
@@ -284,13 +285,36 @@ fn open(
     delay: Duration,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
-    cx.open_window(
+    #[cfg(target_os = "linux")]
+    let bounds = Bounds::new(
+        point(px(0.), px(0.)),
+        size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)),
+    );
+    #[cfg(target_os = "windows")]
+    let bounds = {
+        let display = cx
+            .primary_display()
+            .ok_or_else(|| anyhow::anyhow!("no display available"))?;
+        let screen = display.visible_bounds();
+        let x = match position.horizontal() {
+            -1 => screen.origin.x,
+            1 => screen.origin.x + screen.size.width - px(SURFACE_WIDTH),
+            _ => screen.origin.x + (screen.size.width - px(SURFACE_WIDTH)) / 2.,
+        };
+        let y = if position.is_bottom() {
+            screen.origin.y + screen.size.height - px(SURFACE_HEIGHT)
+        } else {
+            screen.origin.y
+        };
+        Bounds::new(point(x, y), size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)))
+    };
+    let handle = cx.open_window(
         WindowOptions {
             titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                point(px(0.), px(0.)),
-                size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)),
-            ))),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            #[cfg(target_os = "windows")]
+            kind: WindowKind::PopUp,
+            #[cfg(target_os = "linux")]
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: "saiki".into(),
                 layer: Layer::Overlay,
@@ -304,15 +328,22 @@ fn open(
             inactive_frame_interval: None,
             ..Default::default()
         },
-        |window, cx| {
-            window.set_input_region(Some(&[]));
+        |_window, cx| {
+            #[cfg(target_os = "linux")]
+            _window.set_input_region(Some(&[]));
             cx.new(|_| {
                 let mut view = Overlay::new(position, delay);
                 populate(&mut view);
                 view
             })
         },
-    )
+    )?;
+    #[cfg(target_os = "windows")]
+    if let Err(error) = handle.update(cx, |_, window, _| configure_windows_overlay(window))? {
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        return Err(error);
+    }
+    Ok(handle)
 }
 
 pub fn demo() -> impl IntoIterator<Item = Stroke> {
@@ -380,6 +411,45 @@ fn card_view(content: &Content) -> Div {
             BoxShadow::new(px(0.), px(8.), rgba(0x00000050).into()).blur_radius(px(24.)),
         ])
         .child(keys)
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_overlay(window: &Window) -> anyhow::Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{COLORREF, HWND},
+        UI::WindowsAndMessaging::*,
+    };
+    let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("get overlay window handle: {error}"))?
+        .as_raw()
+    else {
+        anyhow::bail!("expected a Windows window");
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        SetWindowLongW(
+            hwnd,
+            GWL_EXSTYLE,
+            ((style & !WS_EX_APPWINDOW.0)
+                | WS_EX_LAYERED.0
+                | WS_EX_TRANSPARENT.0
+                | WS_EX_NOACTIVATE.0
+                | WS_EX_TOOLWINDOW.0) as i32,
+        );
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
