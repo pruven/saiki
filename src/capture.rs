@@ -24,6 +24,7 @@ pub enum CaptureError {
     Device,
     Overlay,
     Position,
+    FadeDelay,
 }
 
 impl CaptureError {
@@ -35,6 +36,7 @@ impl CaptureError {
             Self::Device => "Keyboard capture stopped. Try starting it again.",
             Self::Overlay => "This Wayland compositor needs layer-shell support.",
             Self::Position => "Could not save the overlay position.",
+            Self::FadeDelay => "Could not save the fade delay.",
         }
     }
 }

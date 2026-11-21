@@ -1,6 +1,6 @@
 use crate::capture::{self, CaptureError, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
-use crate::position::Position;
+use crate::settings::{FadeDelay, Position};
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, KeyBinding,
@@ -10,7 +10,17 @@ use gpui::{
 use serde_json::Value;
 use std::{env, fs};
 
-actions!(saiki, [ToggleCapture, ShowHelp, ChoosePosition, Quit]);
+actions!(
+    saiki,
+    [
+        ToggleCapture,
+        ShowHelp,
+        ChoosePosition,
+        ShorterDelay,
+        LongerDelay,
+        Quit
+    ]
+);
 
 pub struct Controls {
     focus: FocusHandle,
@@ -22,6 +32,7 @@ pub struct Controls {
     error: Option<CaptureError>,
     overlay: Option<WindowHandle<Overlay>>,
     position: Position,
+    fade_delay: FadeDelay,
     pending_position: Option<Position>,
     translations: Value,
     tray_status: async_channel::Sender<&'static str>,
@@ -37,6 +48,8 @@ impl Controls {
             KeyBinding::new("space", ToggleCapture, Some("Saiki")),
             KeyBinding::new("shift-/", ShowHelp, Some("Saiki")),
             KeyBinding::new("p", ChoosePosition, Some("Saiki")),
+            KeyBinding::new("[", ShorterDelay, Some("Saiki")),
+            KeyBinding::new("]", LongerDelay, Some("Saiki")),
             KeyBinding::new("q", Quit, Some("Saiki")),
         ]);
         cx.new(|cx| Self {
@@ -49,6 +62,7 @@ impl Controls {
             error: (!layer_shell).then_some(CaptureError::Overlay),
             overlay: None,
             position: Position::load(),
+            fade_delay: FadeDelay::load(),
             pending_position: None,
             translations: translations(),
             tray_status,
@@ -65,10 +79,10 @@ impl Controls {
                 }),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(440.), px(375.)),
+                    size(px(440.), px(420.)),
                     cx,
                 ))),
-                window_min_size: Some(size(px(360.), px(360.))),
+                window_min_size: Some(size(px(360.), px(405.))),
                 app_id: Some("saiki".into()),
                 ..Default::default()
             },
@@ -116,8 +130,14 @@ impl Controls {
                             let strokes = keys
                                 .into_iter()
                                 .filter(|key| !this.shortcuts_only || key.is_shortcut());
-                            overlay::show(cx, &mut this.overlay, this.position, strokes)
-                                .map_err(|_| CaptureError::Overlay)
+                            overlay::show(
+                                cx,
+                                &mut this.overlay,
+                                this.position,
+                                this.fade_delay.duration(),
+                                strokes,
+                            )
+                            .map_err(|_| CaptureError::Overlay)
                         })
                         .map_err(|_| CaptureError::Device)??;
                     }
@@ -155,7 +175,14 @@ impl Controls {
 
     fn preview(&mut self, cx: &mut Context<Self>) {
         if self.layer_shell
-            && overlay::show(cx, &mut self.overlay, self.position, overlay::demo()).is_err()
+            && overlay::show(
+                cx,
+                &mut self.overlay,
+                self.position,
+                self.fade_delay.duration(),
+                overlay::demo(),
+            )
+            .is_err()
         {
             self.error = Some(CaptureError::Overlay);
             cx.notify();
@@ -207,6 +234,63 @@ impl Controls {
         };
         self.pending_position = Some(Position::ALL[target]);
         cx.notify();
+    }
+
+    fn adjust_delay(&mut self, longer: bool, cx: &mut Context<Self>) {
+        let delay = self.fade_delay.step(longer);
+        if delay == self.fade_delay {
+            return;
+        }
+        self.fade_delay = delay;
+        if delay.save().is_err() {
+            self.error = Some(CaptureError::FadeDelay);
+        } else if self.error == Some(CaptureError::FadeDelay) {
+            self.error = None;
+        }
+        if let Some(overlay) = self.overlay {
+            let _ = overlay.update(cx, |view, _, cx| view.set_delay(delay.duration(), cx));
+        }
+        cx.notify();
+    }
+
+    fn fade_delay_control(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .text_size(px(13.))
+            .child(self.text("Fade delay"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(
+                        button("shorter-delay", "−".into(), false)
+                            .when(self.fade_delay.step(false) == self.fade_delay, |el| {
+                                el.opacity(0.4)
+                            })
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.adjust_delay(false, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(46.))
+                            .text_center()
+                            .child(format!("{:.1} s", self.fade_delay.duration().as_secs_f64())),
+                    )
+                    .child(
+                        button("longer-delay", "+".into(), false)
+                            .when(self.fade_delay.step(true) == self.fade_delay, |el| {
+                                el.opacity(0.4)
+                            })
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.adjust_delay(true, cx)
+                            })),
+                    ),
+            )
     }
 
     fn position_picker(&self, cx: &mut Context<Self>) -> Div {
@@ -265,7 +349,7 @@ impl Render for Controls {
             "Capture paused"
         };
         let detail = if self.help {
-            "Space  Start or pause capture\nP  Choose overlay position\nQ  Quit\n?  Show keyboard shortcuts"
+            "Space  Start or pause capture\nP  Choose overlay position\n[ / ]  Adjust fade delay\nQ  Quit\n?  Show keyboard shortcuts"
         } else if let Some(error) = self.error {
             error.message()
         } else if self.capturing {
@@ -281,6 +365,8 @@ impl Render for Controls {
             .on_action(
                 cx.listener(|this, _: &ChoosePosition, _, cx| this.toggle_position_picker(cx)),
             )
+            .on_action(cx.listener(|this, _: &ShorterDelay, _, cx| this.adjust_delay(false, cx)))
+            .on_action(cx.listener(|this, _: &LongerDelay, _, cx| this.adjust_delay(true, cx)))
             .on_key_down(cx.listener(Self::position_key))
             .on_action(cx.listener(|this, _: &ShowHelp, _, cx| {
                 this.pending_position = None;
@@ -321,7 +407,7 @@ impl Render for Controls {
                                         })
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
-                                        .child(overlay::keyboard_mark())
+                                        .child(keyboard_mark())
                                         .child("Saiki"),
                                 )
                                 .child(chrome_button("minimize", "−", |_, window, _| {
@@ -389,6 +475,7 @@ impl Render for Controls {
                                 .child(self.text("Only show Ctrl, Alt or Super shortcuts")),
                         )
                         .child(self.position_picker(cx))
+                        .child(self.fade_delay_control(cx))
                         .child(
                             div()
                                 .flex()
@@ -415,6 +502,37 @@ impl Render for Controls {
                 ),
             )
     }
+}
+
+fn keyboard_mark() -> Div {
+    let row = || {
+        div()
+            .flex()
+            .gap(px(1.4))
+            .children((0..3).map(|_| div().size(px(1.55)).rounded(px(0.4)).bg(rgb(0xd8dcf0))))
+    };
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(20.))
+        .rounded(px(7.))
+        .bg(rgb(0x424651))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .w(px(12.))
+                .h(px(9.))
+                .gap(px(1.1))
+                .border_1()
+                .border_color(rgb(0xd8dcf0))
+                .rounded(px(2.))
+                .child(row())
+                .child(div().w(px(5.)).h(px(1.)).rounded(px(0.5)).bg(rgb(0xd8dcf0))),
+        )
 }
 
 fn button(id: &'static str, text: String, primary: bool) -> gpui::Stateful<Div> {

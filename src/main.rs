@@ -1,7 +1,7 @@
 mod capture;
 mod controls;
 mod overlay;
-mod position;
+mod settings;
 mod tray;
 
 use anyhow::{Context as _, Result, bail};
@@ -83,7 +83,13 @@ fn run() -> Result<()> {
             start_session(cx, layer_shell, bus, commands, incoming)
         } else {
             cx.set_quit_mode(QuitMode::LastWindowClosed);
-            overlay::show(cx, &mut None, position::Position::load(), overlay::demo())
+            overlay::show(
+                cx,
+                &mut None,
+                settings::Position::load(),
+                settings::FadeDelay::load().duration(),
+                overlay::demo(),
+            )
         };
         if let Err(error) = opened {
             *startup.borrow_mut() = Err(error);

@@ -2,7 +2,7 @@
 
 ![Saiki showing a typed word and two shortcuts](preview.png)
 
-Saiki shows your keystrokes in a click-through overlay for demos and screen recordings on Wayland. Rounded charcoal cards stack newest first along either screen edge and begin fading 2.6 seconds after the last key. Saiki renders them with [GPUI](https://gpui.rs/). The card style and motion take cues from [Hokum’s notifications](https://github.com/anomalyco/hokum).
+Saiki shows your keystrokes in a click-through overlay for demos and screen recordings on Wayland. Rounded charcoal cards stack newest first along either screen edge and fade after the selected delay. Saiki renders them with [GPUI](https://gpui.rs/). The card style and motion take cues from [Hokum’s notifications](https://github.com/anomalyco/hokum).
 
 The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-archipelago/gpui-unofficial) for its Wayland layer-shell and click-through APIs.
 
@@ -23,7 +23,7 @@ Enable **Only show Ctrl, Alt or Super shortcuts** to hide ordinary typing. Pausi
 
 Letters appear together as you type. Space finishes a word, Backspace edits the current word, and shortcuts get their own cards.
 
-Use **Overlay position** to pick a corner or the center of the top or bottom edge. Saiki remembers the position between launches.
+Use **Overlay position** to pick a corner or the center of the top or bottom edge. Use **Fade delay** to choose how long cards stay visible after the last key, from 0.5 to 10 seconds. The default is 2.6 seconds. Saiki remembers both settings between launches.
 
 Click **Preview** or run `build/saiki --demo` to show a sample stack.
 
@@ -31,6 +31,7 @@ Click **Preview** or run `build/saiki --demo` to show a sample stack.
 | --- | --- |
 | Space | Start or pause capture |
 | P | Open the position picker. Use arrows and Enter to select |
+| [ / ] | Shorten or lengthen the fade delay |
 | Q | Quit |
 | ? | Show shortcuts |
 

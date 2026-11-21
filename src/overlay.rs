@@ -1,5 +1,5 @@
 use crate::capture::Stroke;
-use crate::position::Position;
+use crate::settings::Position;
 use gpui::layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::prelude::*;
 use gpui::{
@@ -9,13 +9,12 @@ use gpui::{
 use std::time::{Duration, Instant};
 
 const CARD_WIDTH: f32 = 340.;
-const CARD_HEIGHT: f32 = 82.;
-const CARD_GAP: f32 = 9.;
+const CARD_HEIGHT: f32 = 50.;
+const CARD_GAP: f32 = 7.;
 const GUTTER: f32 = 18.;
 const SURFACE_WIDTH: f32 = CARD_WIDTH + GUTTER + 44.;
 const MAX_CARDS: usize = 4;
 const SURFACE_HEIGHT: f32 = GUTTER + MAX_CARDS as f32 * (CARD_HEIGHT + CARD_GAP) + 34.;
-const LIFETIME: Duration = Duration::from_millis(2600);
 const ENTER: Duration = Duration::from_millis(360);
 const EXIT: Duration = Duration::from_millis(180);
 
@@ -46,36 +45,43 @@ impl Card {
         self.from + (self.row - self.from) * spring
     }
 
-    fn fade_at(&self) -> Instant {
-        self.last_key + LIFETIME
+    fn fade_at(&self, delay: Duration) -> Instant {
+        self.last_key + delay
     }
 
-    fn expires(&self) -> Instant {
-        self.fade_at() + EXIT
+    fn expires(&self, delay: Duration) -> Instant {
+        self.fade_at(delay) + EXIT
     }
 }
 
 pub struct Overlay {
     position: Position,
+    delay: Duration,
     cards: Vec<Card>,
     wake_at: Option<Instant>,
     wake: Option<Task<()>>,
 }
 
 impl Overlay {
-    fn new(position: Position) -> Self {
+    fn new(position: Position, delay: Duration) -> Self {
         Self {
             position,
+            delay,
             cards: Vec::new(),
             wake_at: None,
             wake: None,
         }
     }
 
+    pub fn set_delay(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.delay = delay;
+        cx.notify();
+    }
+
     fn push(&mut self, stroke: Stroke, now: Instant) {
-        self.cards.retain(|card| card.expires() > now);
+        self.cards.retain(|card| card.expires(self.delay) > now);
         if let Some(card) = self.cards.first_mut()
-            && now < card.fade_at()
+            && now < card.fade_at(self.delay)
             && let Content::Word { text, open } = &mut card.content
             && *open
         {
@@ -146,12 +152,12 @@ impl Overlay {
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
-        self.cards.retain(|card| card.expires() > now);
+        self.cards.retain(|card| card.expires(self.delay) > now);
         self.restack(now);
         if self
             .cards
             .iter()
-            .any(|card| now - card.moved < ENTER || now >= card.fade_at())
+            .any(|card| now - card.moved < ENTER || now >= card.fade_at(self.delay))
         {
             window.request_animation_frame();
         }
@@ -162,7 +168,7 @@ impl Render for Overlay {
         let next = self
             .cards
             .iter()
-            .map(Card::fade_at)
+            .map(|card| card.fade_at(self.delay))
             .filter(|deadline| *deadline > now)
             .min();
         if next != self.wake_at {
@@ -190,7 +196,10 @@ impl Render for Overlay {
             .overflow_hidden()
             .children(self.cards.iter().rev().map(|card| {
                 let enter = progress(now - card.born, ENTER);
-                let exit = progress(now.saturating_duration_since(card.fade_at()), EXIT);
+                let exit = progress(
+                    now.saturating_duration_since(card.fade_at(self.delay)),
+                    EXIT,
+                );
                 let slide = 36. * (1. - enter).powi(3) + 24. * exit.powi(2);
                 let vertical_slide = if horizontal == 0 { slide / 2. } else { 0. };
                 let offset = GUTTER + card.y(now) - vertical_slide;
@@ -203,6 +212,10 @@ impl Render for Overlay {
                     .absolute()
                     .left(px(left + f32::from(horizontal) * slide))
                     .top(px(y))
+                    .w(px(CARD_WIDTH))
+                    .flex()
+                    .when(horizontal == 1, |row| row.justify_end())
+                    .when(horizontal == 0, |row| row.justify_center())
                     .opacity((enter * 2.7).min(1.) * (1. - exit))
                     .child(card_view(&card.content))
             }))
@@ -217,6 +230,7 @@ pub fn show(
     cx: &mut App,
     overlay: &mut Option<WindowHandle<Overlay>>,
     position: Position,
+    delay: Duration,
     strokes: impl IntoIterator<Item = Stroke>,
 ) -> anyhow::Result<()> {
     let mut strokes = strokes.into_iter().peekable();
@@ -237,7 +251,7 @@ pub fn show(
             cx.notify();
         });
     }
-    *overlay = Some(open(cx, position, populate)?);
+    *overlay = Some(open(cx, position, delay, populate)?);
     Ok(())
 }
 
@@ -249,14 +263,17 @@ pub fn relocate(
     let Some(handle) = overlay.take() else {
         return Ok(());
     };
-    let Ok(cards) = handle.update(cx, |view, window, _| {
+    let Ok((cards, delay)) = handle.update(cx, |view, window, _| {
         window.remove_window();
-        std::mem::take(&mut view.cards)
+        (std::mem::take(&mut view.cards), view.delay)
     }) else {
         return Ok(());
     };
-    if cards.iter().any(|card| card.expires() > Instant::now()) {
-        *overlay = Some(open(cx, position, |view| view.cards = cards)?);
+    if cards
+        .iter()
+        .any(|card| card.expires(delay) > Instant::now())
+    {
+        *overlay = Some(open(cx, position, delay, |view| view.cards = cards)?);
     }
     Ok(())
 }
@@ -264,6 +281,7 @@ pub fn relocate(
 fn open(
     cx: &mut App,
     position: Position,
+    delay: Duration,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
     cx.open_window(
@@ -289,7 +307,7 @@ fn open(
         |window, cx| {
             window.set_input_region(Some(&[]));
             cx.new(|_| {
-                let mut view = Overlay::new(position);
+                let mut view = Overlay::new(position, delay);
                 populate(&mut view);
                 view
             })
@@ -311,37 +329,6 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .into_iter()
     .chain("hello".chars().map(Stroke::Text))
     .chain([Stroke::Space])
-}
-
-pub fn keyboard_mark() -> Div {
-    let row = || {
-        div()
-            .flex()
-            .gap(px(1.4))
-            .children((0..3).map(|_| div().size(px(1.55)).rounded(px(0.4)).bg(rgb(0xd8dcf0))))
-    };
-    div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .size(px(20.))
-        .rounded(px(7.))
-        .bg(rgb(0x424651))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .w(px(12.))
-                .h(px(9.))
-                .gap(px(1.1))
-                .border_1()
-                .border_color(rgb(0xd8dcf0))
-                .rounded(px(2.))
-                .child(row())
-                .child(div().w(px(5.)).h(px(1.)).rounded(px(0.5)).bg(rgb(0xd8dcf0))),
-        )
 }
 
 fn card_view(content: &Content) -> Div {
@@ -379,12 +366,11 @@ fn card_view(content: &Content) -> Div {
         }
     };
     div()
-        .w(px(CARD_WIDTH))
+        .max_w(px(CARD_WIDTH))
         .h(px(CARD_HEIGHT))
-        .p(px(12.))
+        .px(px(12.))
         .flex()
-        .flex_col()
-        .justify_between()
+        .items_center()
         .rounded(px(16.))
         .bg(rgb(SURFACE))
         .border_1()
@@ -393,17 +379,6 @@ fn card_view(content: &Content) -> Div {
             BoxShadow::new(px(0.), px(2.), rgba(0x00000045).into()).blur_radius(px(6.)),
             BoxShadow::new(px(0.), px(8.), rgba(0x00000050).into()).blur_radius(px(24.)),
         ])
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(MUTED))
-                .child(keyboard_mark())
-                .child("Saiki"),
-        )
         .child(keys)
 }
 
@@ -411,9 +386,11 @@ fn card_view(content: &Content) -> Div {
 mod tests {
     use super::*;
 
+    const TEST_DELAY: Duration = Duration::from_millis(1500);
+
     #[test]
     fn groups_letters_and_keeps_shortcuts_separate() {
-        let mut overlay = Overlay::new(Position::TopRight);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
         let now = Instant::now();
         for character in "hello world".chars() {
             overlay.push(
@@ -455,12 +432,12 @@ mod tests {
 
     #[test]
     fn edits_the_current_word_and_refreshes_its_timeout() {
-        let mut overlay = Overlay::new(Position::TopRight);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
         let now = Instant::now();
         overlay.push(Stroke::Text('h'), now);
         let later = now + Duration::from_millis(1200);
         overlay.push(Stroke::Text('é'), later);
-        assert_eq!(overlay.cards[0].fade_at(), later + LIFETIME);
+        assert_eq!(overlay.cards[0].fade_at(overlay.delay), later + TEST_DELAY);
         overlay.push(Stroke::Backspace, later);
         assert_eq!(
             overlay.cards[0].content,
@@ -475,7 +452,7 @@ mod tests {
 
     #[test]
     fn keeps_the_four_latest_cards() {
-        let mut overlay = Overlay::new(Position::TopRight);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
         let now = Instant::now();
         for n in 0..8 {
             overlay.push(
@@ -496,6 +473,6 @@ mod tests {
             .collect();
         assert_eq!(shown, ["7", "6", "5", "4"]);
         assert_eq!(overlay.cards[3].row, 3. * (CARD_HEIGHT + CARD_GAP));
-        assert!(overlay.cards[0].expires() > overlay.cards[3].expires());
+        assert!(overlay.cards[0].expires(overlay.delay) > overlay.cards[3].expires(overlay.delay));
     }
 }
