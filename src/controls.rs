@@ -1,11 +1,13 @@
 use crate::capture::{self, CaptureError, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
 use crate::settings::{FadeDelay, Position};
+#[cfg(target_os = "linux")]
+use gpui::MouseButton;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, KeyBinding,
-    KeyDownEvent, MouseButton, Task, TitlebarOptions, Window, WindowBounds, WindowHandle,
-    WindowOptions, actions, div, px, rgb, rgba, size,
+    KeyDownEvent, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, px, rgb, rgba, size,
 };
 use serde_json::Value;
 use std::{env, fs};
@@ -366,6 +368,7 @@ impl Render for Controls {
             "Show keypresses over the other apps on your screen."
         };
 
+        #[cfg(target_os = "linux")]
         let chrome = div()
             .flex()
             .items_center()
@@ -506,6 +509,7 @@ impl Render for Controls {
                     div()
                         .id("controls-body")
                         .flex_1()
+                        .min_h_0()
                         .overflow_y_scroll()
                         .px(px(17.))
                         .pb(px(17.))
@@ -530,7 +534,6 @@ impl Render for Controls {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(chrome)
                             .child(body),
                     ),
                 )
@@ -538,6 +541,7 @@ impl Render for Controls {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn keyboard_mark() -> Div {
     let row = || {
         div()
@@ -588,6 +592,7 @@ fn button(id: &'static str, text: String, primary: bool) -> gpui::Stateful<Div> 
         .child(text)
 }
 
+#[cfg(target_os = "linux")]
 fn chrome_button(
     id: &'static str,
     label: &'static str,
