@@ -31,7 +31,7 @@ rustup default stable-aarch64-pc-windows-msvc
 .\bin\test.ps1 -Target aarch64-pc-windows-msvc
 ```
 
-The same build target also supports cross-compiling from an x64 Windows PC with `rustup target add aarch64-pc-windows-msvc`; run the resulting executable and tests on an ARM PC. Both builds write `build\saiki.exe`. The build script also locates the SDK's x64 shader compiler for GPUI when it is not on PATH.
+To cross-compile from an x64 Windows PC, install the Visual Studio **MSVC ARM64/ARM64EC build tools** component and the Windows SDK, then run `rustup target add aarch64-pc-windows-msvc` and `.\bin\build.ps1 -Target aarch64-pc-windows-msvc`. Run the resulting executable and tests on an ARM PC. Both builds write `build\saiki.exe`. The build script also locates the SDK's x64 shader compiler for GPUI when it is not on PATH.
 
 Use `.\bin\test.ps1` to run tests and `.\build\saiki.exe --demo` to preview the overlay. Settings are saved in `%APPDATA%\saiki`. The tray menu provides Open, Start, Pause, and Quit; launching Saiki again opens the existing session, and `.\build\saiki.exe --quit` exits it.
 
