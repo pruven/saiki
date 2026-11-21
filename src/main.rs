@@ -328,8 +328,16 @@ mod tests {
             let (commands, incoming) = async_channel::unbounded();
             let (status, statuses) = async_channel::unbounded();
             status.try_send("Capture paused").unwrap();
+            let mut next = std::pin::pin!(next_windows_command(&incoming, &statuses));
+            // With commands still open, consuming a status must leave the session waiting.
+            assert!(
+                futures_lite::future::poll_once(next.as_mut())
+                    .await
+                    .is_none()
+            );
+            assert!(statuses.is_empty());
             drop(commands);
-            assert!(next_windows_command(&incoming, &statuses).await.is_none());
+            assert!(next.await.is_none());
         });
     }
 
