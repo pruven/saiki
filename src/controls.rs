@@ -153,7 +153,14 @@ impl Controls {
             .items_center()
             .gap(px(7.))
             .text_size(px(13.))
-            .text_color(rgb(MUTED));
+            .text_color(rgb(MUTED))
+            .when(!matches!(self.update, UpdateStatus::Checking), |row| {
+                row.child(
+                    button("check-for-updates", self.text("Check for updates"), false).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.check_for_updates(cx)),
+                    ),
+                )
+            });
         match &self.update {
             UpdateStatus::Available(release) => {
                 let page = release.page_url.clone();
@@ -176,17 +183,9 @@ impl Controls {
                 row
             }
             UpdateStatus::Checking => row.child(self.text("Checking for updates…")),
-            status => row
-                .child(
-                    button("check-for-updates", self.text("Check for updates"), false).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.check_for_updates(cx)),
-                    ),
-                )
-                .children(match status {
-                    UpdateStatus::Current => Some(self.text("No update available")),
-                    UpdateStatus::Failed => Some(self.text("Could not check for updates")),
-                    _ => None,
-                }),
+            UpdateStatus::Current => row.child(self.text("No update available")),
+            UpdateStatus::Failed => row.child(self.text("Could not check for updates")),
+            UpdateStatus::Idle => row,
         }
     }
 

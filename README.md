@@ -8,7 +8,12 @@ The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-ar
 
 ## Install on Arch Linux
 
-Download the x86_64 package from [GitHub Releases](https://github.com/pruven/saiki/releases/latest) and install it with `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst` from the download directory. Open Saiki from your launcher or run `saiki`.
+Download the `x86_64` package for Arch Linux or the `aarch64` package for Arch Linux ARM from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). From the download directory, install the matching package:
+
+- x86_64: `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst`
+- ARM64: `sudo pacman -U ./saiki-*-aarch64.pkg.tar.zst`
+
+Open Saiki from your launcher or run `saiki`.
 
 ## Install on Windows
 
@@ -16,7 +21,7 @@ Download `saiki-windows-x86_64.zip` for Intel/AMD PCs or `saiki-windows-arm64.zi
 
 ## Updates
 
-Saiki checks GitHub for a stable release when you first open the controls. Use **Check for updates** to check again. If a newer release is available, **Download update** opens the package for your platform in your browser, and **Release notes** opens the GitHub release. Follow the installation instructions above to apply the update. On Windows, quit Saiki from the tray before replacing the executable.
+Saiki checks GitHub for a stable release when you first open the controls. Use **Check for updates** to check again. When a newer release is available, **Release notes** opens the GitHub release. If that release has a package for your platform, **Download update** opens the package in your browser. Follow the installation instructions above to apply a downloaded update. On Windows, quit Saiki from the tray before replacing the executable.
 
 ## Run from source
 
@@ -83,4 +88,4 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions tests Linux, runs Windows tests on native x64 and ARM64 runners and publishes the x86_64 Arch package and separate Windows x64 and ARM64 ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes the Arch packages and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.

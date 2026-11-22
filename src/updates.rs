@@ -110,6 +110,7 @@ mod tests {
             "assets": [
                 {"name": "saiki-0.10.0-fake-x86_64.pkg.tar.zst"},
                 {"name": "saiki-0.10.0-1-x86_64.pkg.tar.zst"},
+                {"name": "saiki-0.10.0-1-aarch64.pkg.tar.zst"},
                 {"name": "saiki-windows-x86_64.zip"},
                 {"name": "saiki-windows-arm64.zip"}
             ]
@@ -117,7 +118,12 @@ mod tests {
         let current = Version::new(0, 9, 0);
         for (os, arch, asset) in [
             ("linux", "x86_64", Some("saiki-0.10.0-1-x86_64.pkg.tar.zst")),
-            ("linux", "aarch64", None),
+            (
+                "linux",
+                "aarch64",
+                Some("saiki-0.10.0-1-aarch64.pkg.tar.zst"),
+            ),
+            ("linux", "riscv64", None),
             ("windows", "x86_64", Some("saiki-windows-x86_64.zip")),
             ("windows", "aarch64", Some("saiki-windows-arm64.zip")),
         ] {
