@@ -1,4 +1,4 @@
-use super::{CaptureError, Stroke};
+use super::{CaptureError, SUPER_KEY, Stroke};
 use async_channel::{Receiver, Sender};
 use std::{
     cell::RefCell,
@@ -231,14 +231,22 @@ impl HookState {
         for (generic, left, right) in [(0x10, 0xa0, 0xa1), (0x11, 0xa2, 0xa3), (0x12, 0xa4, 0xa5)] {
             self.keys[generic] = self.keys[left] | self.keys[right];
         }
-        if !pressed || matches!(key, 0x10..=0x12 | 0x5b..=0x5c | 0xa0..=0xa5) {
+        if matches!(VIRTUAL_KEY(key as u16), VK_LWIN | VK_RWIN) {
+            return (pressed && !was_down).then(|| {
+                vec![Stroke::Key {
+                    caps: vec![SUPER_KEY.into()],
+                    shortcut: true,
+                }]
+            });
+        }
+        if !pressed || matches!(key, 0x10..=0x12 | 0xa0..=0xa5) {
             return None;
         }
         let down = |key| self.keys[key] & 0x80 != 0;
         let alt_gr = down(0xa5) && down(0x11);
         let ctrl = down(0x11) && !alt_gr;
         let alt = down(0x12) && !alt_gr;
-        let win = down(0x5b) || down(0x5c);
+        let win = down(VK_LWIN.0 as usize) || down(VK_RWIN.0 as usize);
         let shift = down(0x10);
         let shortcut = ctrl || alt || win;
         if !shortcut {
@@ -281,7 +289,7 @@ impl HookState {
         let caps = [
             (ctrl, "Ctrl"),
             (alt, "Alt"),
-            (win, "Super"),
+            (win, SUPER_KEY),
             (alt_gr, "AltGr"),
             (shift, "Shift"),
         ]
@@ -355,6 +363,37 @@ mod tests {
             },
             pressed,
         )
+    }
+
+    #[test]
+    fn shows_either_windows_key_on_press_and_in_shortcuts() {
+        for key in [VK_LWIN, VK_RWIN] {
+            let (sender, _) = async_channel::bounded(1);
+            let mut state = HookState {
+                sender,
+                keys: [0; 256],
+            };
+            let key = u32::from(key.0);
+            let standalone = Some(vec![Stroke::Key {
+                caps: vec![SUPER_KEY.into()],
+                shortcut: true,
+            }]);
+            assert_eq!(update(&mut state, key, true), standalone);
+            assert!(update(&mut state, key, true).is_none());
+            assert_eq!(
+                update(&mut state, u32::from(VK_SPACE.0), true),
+                Some(vec![Stroke::Key {
+                    caps: vec![SUPER_KEY.into(), "Space".into()],
+                    shortcut: true,
+                }])
+            );
+            assert!(update(&mut state, key, false).is_none());
+            assert_eq!(
+                update(&mut state, u32::from(VK_SPACE.0), true),
+                Some(vec![Stroke::Space])
+            );
+            assert_eq!(update(&mut state, key, true), standalone);
+        }
     }
 
     #[test]

@@ -126,6 +126,7 @@ fn run() -> Result<()> {
                 &mut None,
                 settings::Position::load(),
                 settings::FadeDelay::load().duration(),
+                settings::SuperKeyStyle::load(),
                 overlay::demo(),
             )
         };

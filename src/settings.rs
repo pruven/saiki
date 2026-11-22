@@ -134,6 +134,52 @@ impl FadeDelay {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuperKeyStyle {
+    Text,
+    WindowsIcon,
+}
+
+impl Default for SuperKeyStyle {
+    fn default() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::WindowsIcon
+        } else {
+            Self::Text
+        }
+    }
+}
+
+impl SuperKeyStyle {
+    pub const ALL: [Self; 2] = [Self::Text, Self::WindowsIcon];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Super",
+            Self::WindowsIcon => "Windows icon",
+        }
+    }
+
+    pub fn load() -> Self {
+        let saved = path("super-key-style").and_then(|path| fs::read_to_string(path).ok());
+        match saved.as_deref().map(str::trim) {
+            Some("text") => Self::Text,
+            Some("windows-icon") => Self::WindowsIcon,
+            _ => Self::default(),
+        }
+    }
+
+    pub fn save(self) -> io::Result<()> {
+        save(
+            "super-key-style",
+            match self {
+                Self::Text => "text",
+                Self::WindowsIcon => "windows-icon",
+            },
+        )
+    }
+}
+
 fn path(name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let dir = env::var_os("APPDATA").map(PathBuf::from)?;

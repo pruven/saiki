@@ -1,6 +1,6 @@
 use crate::capture::{self, CaptureError, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
-use crate::settings::{FadeDelay, Position};
+use crate::settings::{FadeDelay, Position, SuperKeyStyle};
 #[cfg(target_os = "linux")]
 use gpui::MouseButton;
 use gpui::prelude::*;
@@ -35,6 +35,7 @@ pub struct Controls {
     overlay: Option<WindowHandle<Overlay>>,
     position: Position,
     fade_delay: FadeDelay,
+    super_key_style: SuperKeyStyle,
     pending_position: Option<Position>,
     translations: Value,
     tray_status: async_channel::Sender<&'static str>,
@@ -65,6 +66,7 @@ impl Controls {
             overlay: None,
             position: Position::load(),
             fade_delay: FadeDelay::load(),
+            super_key_style: SuperKeyStyle::load(),
             pending_position: None,
             translations: translations(),
             tray_status,
@@ -145,6 +147,7 @@ impl Controls {
                                 &mut this.overlay,
                                 this.position,
                                 this.fade_delay.duration(),
+                                this.super_key_style,
                                 strokes,
                             )
                             .map_err(|_| CaptureError::Overlay)
@@ -190,6 +193,7 @@ impl Controls {
                 &mut self.overlay,
                 self.position,
                 self.fade_delay.duration(),
+                self.super_key_style,
                 overlay::demo(),
             )
             .is_err()
@@ -300,6 +304,44 @@ impl Controls {
                                 this.adjust_delay(true, cx)
                             })),
                     ),
+            )
+    }
+
+    fn super_key_control(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .text_size(px(13.))
+            .child(self.text("Super key display"))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(5.))
+                    .children(SuperKeyStyle::ALL.map(|style| {
+                        button(
+                            style.label(),
+                            self.text(style.label()),
+                            self.super_key_style == style,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                this.super_key_style = style;
+                                if style.save().is_err() {
+                                    this.error = Some(CaptureError::SuperKeyStyle);
+                                } else if this.error == Some(CaptureError::SuperKeyStyle) {
+                                    this.error = None;
+                                }
+                                if let Some(overlay) = this.overlay {
+                                    let _ = overlay.update(cx, |view, _, cx| {
+                                        view.set_super_key_style(style, cx)
+                                    });
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    })),
             )
     }
 
@@ -451,10 +493,15 @@ impl Render for Controls {
                                 el.bg(rgb(0xdadbea)).text_color(rgb(0x1b1b1b)).child("✓")
                             }),
                     )
-                    .child(self.text("Only show Ctrl, Alt or Super shortcuts")),
+                    .child(self.text(if cfg!(target_os = "windows") {
+                        "Only show Ctrl, Alt or Windows shortcuts"
+                    } else {
+                        "Only show Ctrl, Alt or Super shortcuts"
+                    })),
             )
             .child(self.position_picker(cx))
             .child(self.fade_delay_control(cx))
+            .child(self.super_key_control(cx))
             .child(
                 div()
                     .flex()

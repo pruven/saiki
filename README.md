@@ -44,11 +44,13 @@ build/saiki
 
 Click **Start capture**, then close the controls or switch apps. Saiki stays in the tray and continues showing keys. Use the tray menu to open Saiki, start or pause capture, or quit. Launching Saiki again opens the current session, and `saiki --quit` exits it from the command line.
 
-Enable **Only show Ctrl, Alt or Super shortcuts** to hide ordinary typing. Pausing clears the cards. To include the overlay in a recording, capture an entire monitor.
+Enable the shortcuts-only option to hide ordinary typing. Pausing clears the cards. To include the overlay in a recording, capture an entire monitor.
 
 Letters appear together as you type. Space finishes a word, Backspace edits the current word, and shortcuts get their own cards.
 
 Use **Overlay position** to pick a corner or the center of the top or bottom edge. Use **Fade delay** to choose how long cards stay visible after the last key, from 0.5 to 10 seconds. The default is 2.6 seconds. Saiki remembers both settings between launches.
+
+Use **Super key display** to choose **Super** or **Windows icon** on either platform. The setting applies to standalone presses and shortcuts and is remembered between launches. Linux defaults to **Super** and Windows defaults to **Windows icon**.
 
 Click **Preview** or run `build/saiki --demo` to show a sample stack.
 
@@ -69,7 +71,7 @@ Capture starts paused. On Linux it uses read-only access to the session’s keyb
 - Read access to the session keyboard’s `/dev/input/event*` device. Saiki reports missing access in its window.
 - A Vulkan driver, libinput, xkbcommon, and system fonts. On Arch, see [PKGBUILD](pkgbuild/PKGBUILD) for package names.
 
-Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout and displays the Windows key as Super.
+Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout.
 
 ## Package and test
 
