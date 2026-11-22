@@ -170,9 +170,16 @@ impl KeyLabels {
         if !pressed || symbol == xkb::Keysym::NoSymbol {
             return None;
         }
+        let is_active = |name: &str| self.0.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
+        let ctrl_alt = [(xkb::MOD_NAME_CTRL, "Ctrl"), (xkb::MOD_NAME_ALT, "Alt")];
         if matches!(symbol.raw(), KEY_Super_L | KEY_Super_R) {
             return Some(Stroke::Key {
-                caps: vec![SUPER_KEY.into()],
+                caps: ctrl_alt
+                    .into_iter()
+                    .filter(|(name, _)| is_active(name))
+                    .map(|(_, label)| label.into())
+                    .chain(std::iter::once(SUPER_KEY.into()))
+                    .collect(),
                 shortcut: true,
             });
         }
@@ -197,7 +204,6 @@ impl KeyLabels {
             return None;
         }
 
-        let is_active = |name| self.0.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
         let shortcut = [xkb::MOD_NAME_CTRL, xkb::MOD_NAME_ALT, xkb::MOD_NAME_LOGO]
             .into_iter()
             .any(is_active);
@@ -214,17 +220,16 @@ impl KeyLabels {
                 return Some(Stroke::Text(character));
             }
         }
-        let caps: Vec<String> = [
-            (xkb::MOD_NAME_CTRL, "Ctrl"),
-            (xkb::MOD_NAME_ALT, "Alt"),
-            (xkb::MOD_NAME_LOGO, SUPER_KEY),
-            ("LevelThree", "AltGr"),
-            (xkb::MOD_NAME_SHIFT, "Shift"),
-        ]
-        .into_iter()
-        .filter(|(name, _)| is_active(name))
-        .map(|(_, label)| label.into())
-        .collect();
+        let caps: Vec<String> = ctrl_alt
+            .into_iter()
+            .chain([
+                (xkb::MOD_NAME_LOGO, SUPER_KEY),
+                ("LevelThree", "AltGr"),
+                (xkb::MOD_NAME_SHIFT, "Shift"),
+            ])
+            .filter(|(name, _)| is_active(name))
+            .map(|(_, label)| label.into())
+            .collect();
 
         let named = match symbol.raw() {
             KEY_BackSpace => "Backspace",
@@ -387,6 +392,27 @@ mod tests {
             assert!(labels.update(code, false).is_none());
             labels.update(KEY_SPACE, false);
             assert_eq!(labels.update(KEY_SPACE, true), Some(Stroke::Space));
+        }
+    }
+
+    #[test]
+    fn includes_held_ctrl_and_alt_when_super_is_pressed() {
+        for (modifiers, caps) in [
+            (&[29][..], vec!["Ctrl", SUPER_KEY]),
+            (&[56][..], vec!["Alt", SUPER_KEY]),
+            (&[29, 56][..], vec!["Ctrl", "Alt", SUPER_KEY]),
+        ] {
+            let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
+            for &code in modifiers {
+                assert!(labels.update(code, true).is_none());
+            }
+            assert_eq!(
+                labels.update(125, true),
+                Some(Stroke::Key {
+                    caps: caps.into_iter().map(str::to_owned).collect(),
+                    shortcut: true,
+                })
+            );
         }
     }
 
