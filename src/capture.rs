@@ -7,6 +7,8 @@ pub use linux::{Keyboard, while_unlocked};
 #[cfg(target_os = "windows")]
 pub use windows::{Keyboard, while_unlocked};
 
+pub const SUPER_KEY: &str = "Super";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureError {
     Keyboard,
@@ -17,6 +19,7 @@ pub enum CaptureError {
     Overlay,
     Position,
     FadeDelay,
+    SuperKeyStyle,
 }
 
 impl CaptureError {
@@ -36,6 +39,7 @@ impl CaptureError {
             Self::Overlay => "This Wayland compositor needs layer-shell support.",
             Self::Position => "Could not save the overlay position.",
             Self::FadeDelay => "Could not save the fade delay.",
+            Self::SuperKeyStyle => "Could not save the Super key display setting.",
         }
     }
 }

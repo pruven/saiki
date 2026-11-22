@@ -1,4 +1,4 @@
-use super::{CaptureError, Stroke};
+use super::{CaptureError, SUPER_KEY, Stroke};
 use anyhow::Result;
 use async_io::Async;
 use futures_lite::{StreamExt, future};
@@ -170,6 +170,12 @@ impl KeyLabels {
         if !pressed || symbol == xkb::Keysym::NoSymbol {
             return None;
         }
+        if matches!(symbol.raw(), KEY_Super_L | KEY_Super_R) {
+            return Some(Stroke::Key {
+                caps: vec![SUPER_KEY.into()],
+                shortcut: true,
+            });
+        }
         if mods_changed && !matches!(symbol.raw(), KEY_Caps_Lock | KEY_Num_Lock) {
             return None;
         }
@@ -181,8 +187,6 @@ impl KeyLabels {
                 | KEY_Alt_R
                 | KEY_Meta_L
                 | KEY_Meta_R
-                | KEY_Super_L
-                | KEY_Super_R
                 | KEY_Hyper_L
                 | KEY_Hyper_R
                 | KEY_Shift_L
@@ -213,7 +217,7 @@ impl KeyLabels {
         let caps: Vec<String> = [
             (xkb::MOD_NAME_CTRL, "Ctrl"),
             (xkb::MOD_NAME_ALT, "Alt"),
-            (xkb::MOD_NAME_LOGO, "Super"),
+            (xkb::MOD_NAME_LOGO, SUPER_KEY),
             ("LevelThree", "AltGr"),
             (xkb::MOD_NAME_SHIFT, "Shift"),
         ]
@@ -360,6 +364,30 @@ mod tests {
                 shortcut: true,
             })
         );
+    }
+
+    #[test]
+    fn shows_super_on_press_and_in_shortcuts() {
+        for code in [125, 126] {
+            let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
+            assert_eq!(
+                labels.update(code, true),
+                Some(Stroke::Key {
+                    caps: vec![SUPER_KEY.into()],
+                    shortcut: true
+                })
+            );
+            assert_eq!(
+                labels.update(KEY_SPACE, true),
+                Some(Stroke::Key {
+                    caps: vec![SUPER_KEY.into(), "Space".into()],
+                    shortcut: true,
+                })
+            );
+            assert!(labels.update(code, false).is_none());
+            labels.update(KEY_SPACE, false);
+            assert_eq!(labels.update(KEY_SPACE, true), Some(Stroke::Space));
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use crate::capture::Stroke;
-use crate::settings::Position;
+use crate::capture::{SUPER_KEY, Stroke};
+use crate::settings::{Position, SuperKeyStyle};
 #[cfg(target_os = "linux")]
 use gpui::layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::prelude::*;
@@ -58,16 +58,18 @@ impl Card {
 pub struct Overlay {
     position: Position,
     delay: Duration,
+    super_key_style: SuperKeyStyle,
     cards: Vec<Card>,
     wake_at: Option<Instant>,
     wake: Option<Task<()>>,
 }
 
 impl Overlay {
-    fn new(position: Position, delay: Duration) -> Self {
+    fn new(position: Position, delay: Duration, super_key_style: SuperKeyStyle) -> Self {
         Self {
             position,
             delay,
+            super_key_style,
             cards: Vec::new(),
             wake_at: None,
             wake: None,
@@ -76,6 +78,11 @@ impl Overlay {
 
     pub fn set_delay(&mut self, delay: Duration, cx: &mut Context<Self>) {
         self.delay = delay;
+        cx.notify();
+    }
+
+    pub fn set_super_key_style(&mut self, style: SuperKeyStyle, cx: &mut Context<Self>) {
+        self.super_key_style = style;
         cx.notify();
     }
 
@@ -218,7 +225,7 @@ impl Render for Overlay {
                     .when(horizontal == 1, |row| row.justify_end())
                     .when(horizontal == 0, |row| row.justify_center())
                     .opacity((enter * 2.7).min(1.) * (1. - exit))
-                    .child(card_view(&card.content))
+                    .child(card_view(&card.content, self.super_key_style))
             }))
     }
 }
@@ -232,6 +239,7 @@ pub fn show(
     overlay: &mut Option<WindowHandle<Overlay>>,
     position: Position,
     delay: Duration,
+    super_key_style: SuperKeyStyle,
     strokes: impl IntoIterator<Item = Stroke>,
 ) -> anyhow::Result<()> {
     let mut strokes = strokes.into_iter().peekable();
@@ -252,7 +260,7 @@ pub fn show(
             cx.notify();
         });
     }
-    *overlay = Some(open(cx, position, delay, populate)?);
+    *overlay = Some(open(cx, position, delay, super_key_style, populate)?);
     Ok(())
 }
 
@@ -264,9 +272,13 @@ pub fn relocate(
     let Some(handle) = overlay.take() else {
         return Ok(());
     };
-    let Ok((cards, delay)) = handle.update(cx, |view, window, _| {
+    let Ok((cards, delay, super_key_style)) = handle.update(cx, |view, window, _| {
         window.remove_window();
-        (std::mem::take(&mut view.cards), view.delay)
+        (
+            std::mem::take(&mut view.cards),
+            view.delay,
+            view.super_key_style,
+        )
     }) else {
         return Ok(());
     };
@@ -274,7 +286,9 @@ pub fn relocate(
         .iter()
         .any(|card| card.expires(delay) > Instant::now())
     {
-        *overlay = Some(open(cx, position, delay, |view| view.cards = cards)?);
+        *overlay = Some(open(cx, position, delay, super_key_style, |view| {
+            view.cards = cards
+        })?);
     }
     Ok(())
 }
@@ -283,6 +297,7 @@ fn open(
     cx: &mut App,
     position: Position,
     delay: Duration,
+    super_key_style: SuperKeyStyle,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
     let handle = cx.open_window(
@@ -315,7 +330,7 @@ fn open(
             #[cfg(target_os = "linux")]
             _window.set_input_region(Some(&[]));
             cx.new(|_| {
-                let mut view = Overlay::new(position, delay);
+                let mut view = Overlay::new(position, delay, super_key_style);
                 populate(&mut view);
                 view
             })
@@ -338,7 +353,7 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
             shortcut: true,
         },
         Stroke::Key {
-            caps: vec!["Super".into(), "Space".into()],
+            caps: vec![SUPER_KEY.into(), "Space".into()],
             shortcut: true,
         },
     ]
@@ -347,7 +362,7 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .chain([Stroke::Space])
 }
 
-fn card_view(content: &Content) -> Div {
+fn card_view(content: &Content, super_key_style: SuperKeyStyle) -> Div {
     let keys = match content {
         Content::Word { text, .. } => div()
             .text_color(rgb(TEXT))
@@ -362,6 +377,12 @@ fn card_view(content: &Content) -> Div {
                 .items_center()
                 .gap(px(5.))
                 .children(caps.iter().cloned().map(|cap| {
+                    let label = if cap == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon
+                    {
+                        windows_key_icon()
+                    } else {
+                        div().text_ellipsis().child(cap)
+                    };
                     div()
                         .flex()
                         .items_center()
@@ -377,7 +398,7 @@ fn card_view(content: &Content) -> Div {
                         .text_color(rgb(TEXT))
                         .font_weight(FontWeight::MEDIUM)
                         .text_size(px(13.))
-                        .child(div().text_ellipsis().child(cap))
+                        .child(label)
                 }))
         }
     };
@@ -396,6 +417,19 @@ fn card_view(content: &Content) -> Div {
             BoxShadow::new(px(0.), px(8.), rgba(0x00000050).into()).blur_radius(px(24.)),
         ])
         .child(keys)
+}
+
+fn windows_key_icon() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .children((0..2).map(|_| {
+            div()
+                .flex()
+                .gap(px(1.))
+                .children((0..2).map(|_| div().size(px(5.)).bg(rgb(TEXT))))
+        }))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -554,7 +588,7 @@ mod tests {
 
     #[test]
     fn groups_letters_and_keeps_shortcuts_separate() {
-        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
         let now = Instant::now();
         for character in "hello world".chars() {
             overlay.push(
@@ -596,7 +630,7 @@ mod tests {
 
     #[test]
     fn edits_the_current_word_and_refreshes_its_timeout() {
-        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
         let now = Instant::now();
         overlay.push(Stroke::Text('h'), now);
         let later = now + Duration::from_millis(1200);
@@ -616,7 +650,7 @@ mod tests {
 
     #[test]
     fn keeps_the_four_latest_cards() {
-        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY);
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
         let now = Instant::now();
         for n in 0..8 {
             overlay.push(
