@@ -231,14 +231,6 @@ impl HookState {
         for (generic, left, right) in [(0x10, 0xa0, 0xa1), (0x11, 0xa2, 0xa3), (0x12, 0xa4, 0xa5)] {
             self.keys[generic] = self.keys[left] | self.keys[right];
         }
-        if matches!(VIRTUAL_KEY(key as u16), VK_LWIN | VK_RWIN) {
-            return (pressed && !was_down).then(|| {
-                vec![Stroke::Key {
-                    caps: vec![SUPER_KEY.into()],
-                    shortcut: true,
-                }]
-            });
-        }
         if !pressed || matches!(key, 0x10..=0x12 | 0xa0..=0xa5) {
             return None;
         }
@@ -246,6 +238,20 @@ impl HookState {
         let alt_gr = down(0xa5) && down(0x11);
         let ctrl = down(0x11) && !alt_gr;
         let alt = down(0x12) && !alt_gr;
+        let ctrl_alt = [(ctrl, "Ctrl"), (alt, "Alt")];
+        if matches!(VIRTUAL_KEY(key as u16), VK_LWIN | VK_RWIN) {
+            return (!was_down).then(|| {
+                vec![Stroke::Key {
+                    caps: ctrl_alt
+                        .into_iter()
+                        .filter(|(active, _)| *active)
+                        .map(|(_, label)| label.into())
+                        .chain(std::iter::once(SUPER_KEY.into()))
+                        .collect(),
+                    shortcut: true,
+                }]
+            });
+        }
         let win = down(VK_LWIN.0 as usize) || down(VK_RWIN.0 as usize);
         let shift = down(0x10);
         let shortcut = ctrl || alt || win;
@@ -286,26 +292,21 @@ impl HookState {
             return Some(translated.chars().map(Stroke::Text).collect());
         }
         let label = key_label(key as u32, &translated)?;
-        let caps = [
-            (ctrl, "Ctrl"),
-            (alt, "Alt"),
-            (win, SUPER_KEY),
-            (alt_gr, "AltGr"),
-            (shift, "Shift"),
-        ]
-        .into_iter()
-        .filter(|(active, _)| *active)
-        .map(|(_, label)| label.to_owned())
-        .chain(Some(if shortcut {
-            if label.chars().count() == 1 {
-                label.to_uppercase()
+        let caps = ctrl_alt
+            .into_iter()
+            .chain([(win, SUPER_KEY), (alt_gr, "AltGr"), (shift, "Shift")])
+            .filter(|(active, _)| *active)
+            .map(|(_, label)| label.to_owned())
+            .chain(Some(if shortcut {
+                if label.chars().count() == 1 {
+                    label.to_uppercase()
+                } else {
+                    label
+                }
             } else {
                 label
-            }
-        } else {
-            label
-        }))
-        .collect();
+            }))
+            .collect();
         Some(vec![Stroke::Key { caps, shortcut }])
     }
 }
@@ -393,6 +394,32 @@ mod tests {
                 Some(vec![Stroke::Space])
             );
             assert_eq!(update(&mut state, key, true), standalone);
+        }
+    }
+
+    #[test]
+    fn includes_held_ctrl_and_alt_when_windows_key_is_pressed() {
+        for (modifiers, caps) in [
+            (&[VK_LCONTROL][..], vec!["Ctrl", SUPER_KEY]),
+            (&[VK_LMENU][..], vec!["Alt", SUPER_KEY]),
+            (&[VK_LCONTROL, VK_LMENU][..], vec!["Ctrl", "Alt", SUPER_KEY]),
+            (&[VK_LCONTROL, VK_RMENU][..], vec![SUPER_KEY]),
+        ] {
+            let (sender, _) = async_channel::bounded(1);
+            let mut state = HookState {
+                sender,
+                keys: [0; 256],
+            };
+            for key in modifiers {
+                assert!(update(&mut state, u32::from(key.0), true).is_none());
+            }
+            assert_eq!(
+                update(&mut state, u32::from(VK_LWIN.0), true),
+                Some(vec![Stroke::Key {
+                    caps: caps.into_iter().map(str::to_owned).collect(),
+                    shortcut: true,
+                }])
+            );
         }
     }
 
