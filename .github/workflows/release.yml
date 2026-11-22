@@ -88,6 +88,52 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  linux:
+    name: Linux archive (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config \
+            libinput-dev libudev-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb1-dev libfontconfig1-dev libfreetype-dev libssl-dev xkb-data
+          rustup update stable
+      - name: Test and package
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(uname -m)" = "$PACKAGE_ARCH"
+          ./bin/test
+          ./bin/build
+          ./build/saiki --version
+          archive="saiki-linux-$PACKAGE_ARCH"
+          mkdir -p "release/$archive"
+          install -m755 build/saiki "release/$archive/saiki"
+          install -m644 README.md LICENSE "release/$archive/"
+          cd release
+          tar -czf "$archive.tar.gz" "$archive"
+          sha256sum "$archive.tar.gz" > "SHA256SUMS-archive-linux-$PACKAGE_ARCH"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: saiki-linux-${{ matrix.arch }}
+          path: |
+            release/*.tar.gz
+            release/SHA256SUMS-archive-linux-*
+          if-no-files-found: error
+          compression-level: 0
+
   windows:
     name: Windows (${{ matrix.arch }})
     strategy:
@@ -128,7 +174,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [build, windows]
+    needs: [build, linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -143,7 +189,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cat SHA256SUMS-linux-{x86_64,aarch64} SHA256SUMS-windows-{x86_64,arm64} > SHA256SUMS
+          cat SHA256SUMS-linux-{x86_64,aarch64} SHA256SUMS-archive-linux-{x86_64,aarch64} \
+            SHA256SUMS-windows-{x86_64,arm64} > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
           mapfile -t packages < <(cut -d ' ' -f 3 SHA256SUMS)
           if gh release view "$GITHUB_REF_NAME" --json assets,isDraft > existing-release.json 2>/dev/null; then

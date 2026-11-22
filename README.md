@@ -6,7 +6,11 @@ Saiki shows your keystrokes in a click-through overlay for demos and screen reco
 
 The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-archipelago/gpui-unofficial) for its Wayland layer-shell and click-through APIs.
 
-## Install on Arch Linux
+## Install on Linux
+
+Download `saiki-linux-x86_64.tar.gz` or `saiki-linux-aarch64.tar.gz` for your CPU from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). Extract the archive and run `./saiki` from the extracted directory. The archives are built on Ubuntu 24.04 and require glibc 2.39 or newer and the [Linux runtime dependencies](#linux-requirements). For older distributions, build from source.
+
+### Arch packages
 
 Download the `x86_64` package for Arch Linux or the `aarch64` package for Arch Linux ARM from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). From the download directory, install the matching package:
 
@@ -78,7 +82,13 @@ Capture starts paused. On Linux it uses read-only access to the session’s keyb
 - A Wayland compositor with `zwlr_layer_shell_v1`, such as Hyprland, Sway, or niri.
 - A D-Bus session bus and a StatusNotifier-compatible tray for the tray icon.
 - Read access to the session keyboard’s `/dev/input/event*` device. Saiki reports missing access in its window.
-- A Vulkan driver, libinput, xkbcommon, and system fonts. On Arch, see [PKGBUILD](pkgbuild/PKGBUILD) for package names.
+- A Vulkan driver, libinput, libudev, Wayland client libraries, xkbcommon, libxcb, Fontconfig, FreeType, system fonts, OpenSSL 3, and CA certificates. On Arch, see [PKGBUILD](pkgbuild/PKGBUILD) for package names. On Ubuntu 24.04, install the runtime libraries with:
+
+  ```sh
+  sudo apt install libvulkan1 libinput10 libudev1 libwayland-client0 libwayland-cursor0 \
+    libxkbcommon0 libxkbcommon-x11-0 libxcb1 libfontconfig1 libfreetype6 \
+    libssl3t64 ca-certificates xkb-data fonts-liberation
+  ```
 
 Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout.
 
@@ -88,4 +98,4 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes the Arch packages and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives, Arch packages, and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
