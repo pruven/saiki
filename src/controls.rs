@@ -1,6 +1,7 @@
 use crate::capture::{self, CaptureError, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
 use crate::settings::{FadeDelay, Position, SuperKeyStyle};
+use crate::updates;
 #[cfg(target_os = "linux")]
 use gpui::MouseButton;
 use gpui::prelude::*;
@@ -36,9 +37,18 @@ pub struct Controls {
     position: Position,
     fade_delay: FadeDelay,
     super_key_style: SuperKeyStyle,
+    update: UpdateStatus,
     pending_position: Option<Position>,
     translations: Value,
     tray_status: async_channel::Sender<&'static str>,
+}
+
+enum UpdateStatus {
+    Idle,
+    Checking,
+    Current,
+    Available(updates::Release),
+    Failed,
 }
 
 impl Controls {
@@ -67,6 +77,7 @@ impl Controls {
             position: Position::load(),
             fade_delay: FadeDelay::load(),
             super_key_style: SuperKeyStyle::load(),
+            update: UpdateStatus::Idle,
             pending_position: None,
             translations: translations(),
             tray_status,
@@ -80,7 +91,7 @@ impl Controls {
         } else {
             420.
         };
-        cx.open_window(
+        let window = cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Saiki".into()),
@@ -102,7 +113,81 @@ impl Controls {
                 focus.focus(window, cx);
                 state.clone()
             },
-        )
+        )?;
+        state.update(cx, |this, cx| {
+            if matches!(this.update, UpdateStatus::Idle) {
+                this.check_for_updates(cx);
+            }
+        });
+        Ok(window)
+    }
+
+    fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.update, UpdateStatus::Checking) {
+            return;
+        }
+        self.update = UpdateStatus::Checking;
+        cx.notify();
+        let check = cx.background_spawn(async { updates::check() });
+        cx.spawn(async move |this, cx| {
+            let status = match check.await {
+                Ok(Some(release)) => UpdateStatus::Available(release),
+                Ok(None) => UpdateStatus::Current,
+                Err(error) => {
+                    eprintln!("saiki: update check failed: {error:#}");
+                    UpdateStatus::Failed
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.update = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn update_control(&self, cx: &mut Context<Self>) -> Div {
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(7.))
+            .text_size(px(13.))
+            .text_color(rgb(MUTED));
+        match &self.update {
+            UpdateStatus::Available(release) => {
+                let page = release.page_url.clone();
+                row = row
+                    .child(format!(
+                        "{} v{}",
+                        self.text("Update available"),
+                        release.version
+                    ))
+                    .child(
+                        button("release-notes", self.text("Release notes"), false)
+                            .on_click(move |_, _, cx| cx.open_url(&page)),
+                    );
+                if let Some(url) = release.download_url.clone() {
+                    row = row.child(
+                        button("download-update", self.text("Download update"), true)
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                }
+                row
+            }
+            UpdateStatus::Checking => row.child(self.text("Checking for updates…")),
+            status => row
+                .child(
+                    button("check-for-updates", self.text("Check for updates"), false).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.check_for_updates(cx)),
+                    ),
+                )
+                .children(match status {
+                    UpdateStatus::Current => Some(self.text("No update available")),
+                    UpdateStatus::Failed => Some(self.text("Could not check for updates")),
+                    _ => None,
+                }),
+        }
     }
 
     pub fn text(&self, english: &'static str) -> String {
@@ -523,7 +608,8 @@ impl Render for Controls {
                         button("preview", self.text("Preview"), false)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.preview(cx))),
                     ),
-            );
+            )
+            .child(self.update_control(cx));
 
         let window = div()
             .track_focus(&self.focus)
@@ -567,22 +653,29 @@ impl Render for Controls {
         #[cfg(target_os = "windows")]
         {
             window
+                .id("windows-controls")
                 .bg(rgb(0x1b1b1b))
+                .flex_col()
                 .items_center()
-                .justify_center()
+                .overflow_y_scroll()
                 .child(
-                    div().w_full().max_w(px(480.)).px(px(20.)).child(
-                        div()
-                            .rounded(px(18.))
-                            .bg(rgb(SURFACE))
-                            .border_1()
-                            .border_color(rgba(EDGE))
-                            .p(px(17.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(body),
-                    ),
+                    div()
+                        .w_full()
+                        .max_w(px(480.))
+                        .flex_shrink_0()
+                        .p(px(20.))
+                        .child(
+                            div()
+                                .rounded(px(18.))
+                                .bg(rgb(SURFACE))
+                                .border_1()
+                                .border_color(rgba(EDGE))
+                                .p(px(17.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.))
+                                .child(body),
+                        ),
                 )
         }
     }

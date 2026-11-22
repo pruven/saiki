@@ -9,6 +9,7 @@ mod tray;
 #[cfg(target_os = "windows")]
 #[path = "tray_windows.rs"]
 mod tray;
+mod updates;
 
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;

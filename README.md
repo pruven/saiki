@@ -14,6 +14,10 @@ Download the x86_64 package from [GitHub Releases](https://github.com/pruven/sai
 
 Download `saiki-windows-x86_64.zip` for Intel/AMD PCs or `saiki-windows-arm64.zip` for ARM PCs from [GitHub Releases](https://github.com/pruven/saiki/releases/latest), extract it, and run `saiki.exe`. The x64 build requires Windows 10 version 1607 or newer; the ARM64 build requires Windows 11. Both require a Direct3D 11 capable GPU. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
 
+## Updates
+
+Saiki checks GitHub for a stable release when you first open the controls. Use **Check for updates** to check again. If a newer release is available, **Download update** opens the package for your platform in your browser, and **Release notes** opens the GitHub release. Follow the installation instructions above to apply the update. On Windows, quit Saiki from the tray before replacing the executable.
+
 ## Run from source
 
 On Windows, install [Rust](https://www.rust-lang.org/tools/install) with the MSVC toolchain and Visual Studio Build Tools with **Desktop development with C++** and the Windows SDK. In PowerShell:
