@@ -77,16 +77,15 @@ fn parse_release(
 
     let download_url = release["assets"].as_array().and_then(|assets| {
         let names = assets.iter().filter_map(|asset| asset["name"].as_str());
-        let package =
-            if os == "linux" && prefer_arch_package && matches!(arch, "x86_64" | "aarch64") {
-                let prefix = format!("saiki-{version}-");
-                let suffix = format!("-{arch}.pkg.tar.zst");
-                names
-                    .clone()
-                    .find(|name| matches_arch_package(name, &prefix, &suffix))
-            } else {
-                None
-            };
+        let package = if os == "linux" && prefer_arch_package && arch == "x86_64" {
+            let prefix = format!("saiki-{version}-");
+            let suffix = format!("-{arch}.pkg.tar.zst");
+            names
+                .clone()
+                .find(|name| matches_arch_package(name, &prefix, &suffix))
+        } else {
+            None
+        };
         package
             .or_else(|| {
                 let expected = match (os, arch) {
@@ -161,12 +160,7 @@ mod tests {
                 true,
                 Some("saiki-0.10.0-1-x86_64.pkg.tar.zst"),
             ),
-            (
-                "linux",
-                "aarch64",
-                true,
-                Some("saiki-0.10.0-1-aarch64.pkg.tar.zst"),
-            ),
+            ("linux", "aarch64", true, Some("saiki-linux-aarch64.tar.gz")),
             ("linux", "x86_64", false, Some("saiki-linux-x86_64.tar.gz")),
             (
                 "linux",
