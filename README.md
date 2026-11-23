@@ -12,10 +12,7 @@ Download `saiki-linux-x86_64.tar.gz` or `saiki-linux-aarch64.tar.gz` for your CP
 
 ### Arch packages
 
-Download the `x86_64` package for Arch Linux or the `aarch64` package for Arch Linux ARM from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). From the download directory, install the matching package:
-
-- x86_64: `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst`
-- ARM64: `sudo pacman -U ./saiki-*-aarch64.pkg.tar.zst`
+Download the `x86_64` package for Arch Linux from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). From the download directory, install it with `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst`. ARM64 users can use the Linux archive described above.
 
 Open Saiki from your launcher or run `saiki`.
 
@@ -98,4 +95,4 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives, Arch packages, and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives, x86_64 Arch packages, and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.

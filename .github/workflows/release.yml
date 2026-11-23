@@ -21,11 +21,6 @@ jobs:
             runner: ubuntu-latest
             image: archlinux:base-devel
             vulkan_driver: vulkan-intel
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-            # Arch Linux ARM's package repositories run in this pinned ARM64 image.
-            image: menci/archlinuxarm@sha256:2307646e4a407a3924599da79272da07dccef856ac761055e7fb0237b3e830ca
-            vulkan_driver: vulkan-swrast
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -62,14 +57,7 @@ jobs:
             --env VULKAN_DRIVER \
             "$BUILD_IMAGE" bash -euo pipefail -c '
               test "$(uname -m)" = "$PACKAGE_ARCH"
-              pacman_flags=()
-              if [[ "$PACKAGE_ARCH" == aarch64 ]]; then
-                pacman-key --init
-                pacman-key --populate archlinuxarm
-                # The hosted ARM runner blocks Landlock inside the build container.
-                pacman_flags+=(--disable-sandbox-filesystem)
-              fi
-              pacman -Syu "${pacman_flags[@]}" --noconfirm --needed rust pkgconf wayland "$VULKAN_DRIVER" \
+              pacman -Syu --noconfirm --needed rust pkgconf wayland "$VULKAN_DRIVER" \
                 libinput libxkbcommon-x11 libxcb fontconfig freetype2 ttf-liberation openssl ca-certificates
               useradd --create-home builder
               mkdir /build
@@ -193,7 +181,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # PowerShell writes CRLF. Normalize the manifest before checking or reading filenames.
-          sed 's/\r$//' SHA256SUMS-linux-{x86_64,aarch64} SHA256SUMS-archive-linux-{x86_64,aarch64} \
+          sed 's/\r$//' SHA256SUMS-linux-x86_64 SHA256SUMS-archive-linux-{x86_64,aarch64} \
             SHA256SUMS-windows-{x86_64,arm64} > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
           mapfile -t packages < <(cut -d ' ' -f 3 SHA256SUMS)
