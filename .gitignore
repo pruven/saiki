@@ -1,4 +1,5 @@
 /build/
+/release/
 /target/
 /pkgbuild/*.pkg.tar.*
 /pkgbuild/pkg/

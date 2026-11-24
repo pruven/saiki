@@ -88,14 +88,20 @@ fn parse_release(
         };
         package
             .or_else(|| {
-                let expected = match (os, arch) {
-                    ("windows", "x86_64") => "saiki-windows-x86_64.zip",
-                    ("windows", "aarch64") => "saiki-windows-arm64.zip",
-                    ("linux", "x86_64") => "saiki-linux-x86_64.tar.gz",
-                    ("linux", "aarch64") => "saiki-linux-aarch64.tar.gz",
+                let candidates: &[&str] = match (os, arch) {
+                    ("windows", "x86_64") => {
+                        &["saiki-windows-x86_64-setup.exe", "saiki-windows-x86_64.zip"]
+                    }
+                    ("windows", "aarch64") => {
+                        &["saiki-windows-arm64-setup.exe", "saiki-windows-arm64.zip"]
+                    }
+                    ("linux", "x86_64") => &["saiki-linux-x86_64.tar.gz"],
+                    ("linux", "aarch64") => &["saiki-linux-aarch64.tar.gz"],
                     _ => return None,
                 };
-                names.into_iter().find(|name| *name == expected)
+                candidates
+                    .iter()
+                    .find_map(|expected| names.clone().find(|name| name == expected))
             })
             .map(|name| format!("{RELEASES}/download/{tag}/{name}"))
     });
@@ -149,7 +155,9 @@ mod tests {
                 {"name": "saiki-linux-x86_64.tar.gz"},
                 {"name": "saiki-linux-aarch64.tar.gz"},
                 {"name": "saiki-windows-x86_64.zip"},
-                {"name": "saiki-windows-arm64.zip"}
+                {"name": "saiki-windows-arm64.zip"},
+                {"name": "saiki-windows-x86_64-setup.exe"},
+                {"name": "saiki-windows-arm64-setup.exe"}
             ]
         });
         let current = Version::new(0, 9, 0);
@@ -169,8 +177,18 @@ mod tests {
                 Some("saiki-linux-aarch64.tar.gz"),
             ),
             ("linux", "riscv64", false, None),
-            ("windows", "x86_64", false, Some("saiki-windows-x86_64.zip")),
-            ("windows", "aarch64", false, Some("saiki-windows-arm64.zip")),
+            (
+                "windows",
+                "x86_64",
+                false,
+                Some("saiki-windows-x86_64-setup.exe"),
+            ),
+            (
+                "windows",
+                "aarch64",
+                false,
+                Some("saiki-windows-arm64-setup.exe"),
+            ),
         ] {
             let release = parse_release(&metadata, &current, os, arch, arch_family)
                 .unwrap()
@@ -180,6 +198,24 @@ mod tests {
             assert_eq!(
                 release.download_url,
                 asset.map(|name| format!("{RELEASES}/download/v0.10.0/{name}"))
+            );
+        }
+    }
+
+    #[test]
+    fn falls_back_to_portable_windows_downloads_for_older_releases() {
+        let current = Version::new(0, 9, 0);
+        for (arch, asset) in [
+            ("x86_64", "saiki-windows-x86_64.zip"),
+            ("aarch64", "saiki-windows-arm64.zip"),
+        ] {
+            let metadata = json!({"tag_name":"v0.10.0","assets":[{"name":asset}]});
+            let release = parse_release(&metadata, &current, "windows", arch, false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                release.download_url,
+                Some(format!("{RELEASES}/download/v0.10.0/{asset}"))
             );
         }
     }

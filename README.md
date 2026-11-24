@@ -8,7 +8,15 @@ The build pins a [published snapshot of Zed’s GPUI](https://github.com/gpui-ar
 
 ## Install on Linux
 
-Download `saiki-linux-x86_64.tar.gz` or `saiki-linux-aarch64.tar.gz` for your CPU from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). Extract the archive and run `./saiki` from the extracted directory. The archives are built on Ubuntu 24.04 and require glibc 2.39 or newer and the [Linux runtime dependencies](#linux-requirements). For older distributions, build from source.
+Download `saiki-linux-x86_64.tar.gz` or `saiki-linux-aarch64.tar.gz` for your CPU from [Downloads](https://github.com/pruven/saiki/releases/latest). Extract the archive, open a terminal in the extracted folder, and run:
+
+```sh
+sh install.sh
+```
+
+This installs Saiki in `~/.local/bin` and adds its icon to your application launcher. Open **Saiki** from the launcher; the extracted download can then be deleted. No Rust toolchain or administrator access is needed to install the app. Quit Saiki before reinstalling or updating. To uninstall, quit Saiki and run `~/.local/bin/saiki-uninstall`; your settings are kept.
+
+The Linux builds require glibc 2.39 or newer and the [Linux runtime dependencies](#linux-requirements). For older distributions, build from source.
 
 ### Arch packages
 
@@ -18,11 +26,13 @@ Open Saiki from your launcher or run `saiki`.
 
 ## Install on Windows
 
-Download `saiki-windows-x86_64.zip` for Intel/AMD PCs or `saiki-windows-arm64.zip` for ARM PCs from [GitHub Releases](https://github.com/pruven/saiki/releases/latest), extract it, and run `saiki.exe`. The x64 build requires Windows 10 version 1607 or newer; the ARM64 build requires Windows 11. Both require a Direct3D 11 capable GPU. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
+Download `saiki-windows-x86_64-setup.exe` for Intel/AMD PCs or `saiki-windows-arm64-setup.exe` for ARM PCs from [Downloads](https://github.com/pruven/saiki/releases/latest). Open the setup file and follow the installation wizard. Then open **Saiki** from the Start menu. Setup installs for your account without administrator access, offers an optional desktop shortcut, and adds Saiki to **Settings → Apps** for uninstalling. To update, quit Saiki from the tray and run the newer setup file; your settings are kept. ZIP downloads remain available for portable use.
+
+The x64 build requires Windows 10 version 1607 or newer; the ARM64 build requires Windows 11. Both require a Direct3D 11 capable GPU. Capture runs without administrator access. The overlay appears on the primary display and stays above ordinary application windows; exclusive fullscreen applications may cover it.
 
 ## Updates
 
-Saiki checks GitHub for a stable release when you first open the controls. Use **Check for updates** to check again. When a newer release is available, **Release notes** opens the GitHub release. If that release has a package for your platform, **Download update** opens the package in your browser. Follow the installation instructions above to apply a downloaded update. On Windows, quit Saiki from the tray before replacing the executable.
+Saiki checks GitHub for a stable release when you first open the controls. Use **Check for updates** to check again. When a newer release is available, **Release notes** opens the release notes. **Download update** opens the installer or installation package for your platform in your browser, preferring Windows setup over the portable ZIP. Follow the installation instructions above to apply a downloaded update.
 
 ## Run from source
 
@@ -95,4 +105,6 @@ Run `bin/install` to build and install the Arch package and launcher entry. Run 
 
 Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAIKI_TEST_DEVICES=1 bin/test` from an active desktop session to test keyboard-device access.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives, x86_64 Arch packages, and Windows ZIPs with SHA-256 checksums. Running the workflow manually builds a downloadable artifact.
+To build a Windows installer locally, install Inno Setup 6, run `bin/build.ps1`, then `bin/package.ps1`. For an ARM64 binary, pass `-Arch arm64` to the packaging script. The setup file is written to `release/`.
+
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives with install/uninstall scripts and launcher assets, x86_64 Arch packages, Windows setup installers, and portable Windows ZIPs with SHA-256 checksums. Running the workflow manually builds downloadable artifacts.
