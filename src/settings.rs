@@ -15,6 +15,10 @@ pub enum Position {
     BottomLeft,
     BottomCenter,
     BottomRight,
+    Custom {
+        x: u16,
+        y: u16,
+    },
 }
 
 impl Position {
@@ -35,6 +39,7 @@ impl Position {
             Self::BottomLeft => "Bottom left",
             Self::BottomCenter => "Bottom center",
             Self::BottomRight => "Bottom right",
+            Self::Custom { .. } => "Custom",
         }
     }
 
@@ -46,6 +51,7 @@ impl Position {
             Self::BottomLeft => "bottom-left",
             Self::BottomCenter => "bottom-center",
             Self::BottomRight => "bottom-right",
+            Self::Custom { .. } => "custom",
         }
     }
 
@@ -59,13 +65,16 @@ impl Position {
     pub fn horizontal(self) -> i8 {
         match self {
             Self::TopLeft | Self::BottomLeft => -1,
-            Self::TopCenter | Self::BottomCenter => 0,
+            Self::TopCenter | Self::BottomCenter | Self::Custom { .. } => 0,
             Self::TopRight | Self::BottomRight => 1,
         }
     }
 
     #[cfg(target_os = "linux")]
     pub fn anchor(self) -> Anchor {
+        if matches!(self, Self::Custom { .. }) {
+            return Anchor::TOP | Anchor::LEFT;
+        }
         let vertical = if self.is_bottom() {
             Anchor::BOTTOM
         } else {
@@ -83,14 +92,43 @@ impl Position {
         let saved = path("position")
             .and_then(|path| fs::read_to_string(path).ok())
             .unwrap_or_default();
+        Self::parse(saved.trim()).unwrap_or_default()
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        if let Some((x, y)) = value.split_once(',') {
+            let (x, y) = (x.parse().ok()?, y.parse().ok()?);
+            return (x <= 1000 && y <= 1000).then_some(Self::Custom { x, y });
+        }
         Self::ALL
             .into_iter()
-            .find(|position| position.id() == saved.trim())
-            .unwrap_or_default()
+            .find(|position| position.id() == value)
+    }
+
+    fn encode(self) -> String {
+        match self {
+            Self::Custom { x, y } => format!("{x},{y}"),
+            _ => self.id().into(),
+        }
     }
 
     pub fn save(self) -> io::Result<()> {
-        save("position", self.id())
+        save("position", &self.encode())
+    }
+
+    pub fn load_profiles() -> Vec<Self> {
+        path("position-profiles")
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(Self::parse)
+            .filter(|position| matches!(position, Self::Custom { .. }))
+            .collect()
+    }
+
+    pub fn save_profiles(profiles: &[Self]) -> io::Result<()> {
+        let entries: Vec<_> = profiles.iter().map(|position| position.encode()).collect();
+        save("position-profiles", &entries.join("\n"))
     }
 }
 
@@ -208,6 +246,16 @@ fn save(name: &str, value: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_positions_round_trip_and_reject_out_of_range_coordinates() {
+        let position = Position::Custom { x: 250, y: 1000 };
+        assert_eq!(Position::parse(&position.encode()), Some(position));
+        assert_eq!(Position::parse("250,1001"), None);
+        assert_eq!(Position::parse("-1,500"), None);
+        assert_eq!(Position::parse("custom"), None);
+        assert_eq!(Position::parse("top-right"), Some(Position::TopRight));
+    }
 
     #[test]
     fn replaces_an_existing_settings_file() {
