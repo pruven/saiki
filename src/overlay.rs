@@ -301,22 +301,15 @@ fn open(
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
     #[cfg(target_os = "linux")]
-    let display = match position {
-        Position::Custom { .. } => cx.primary_display().or_else(|| {
-            // Wayland does not report a primary monitor.
-            cx.displays().into_iter().min_by_key(|display| {
-                let origin = display.bounds().origin;
-                (origin.x, origin.y, u64::from(display.id()))
-            })
-        }),
-        _ => None,
-    };
+    let display = matches!(position, Position::Custom { .. })
+        .then(|| placement_display(cx))
+        .flatten();
     #[cfg(target_os = "linux")]
     let margin = match (position, &display) {
         (Position::Custom { x, y }, Some(display)) => {
             let screen = display.bounds().size;
             let left = placement_offset(f32::from(screen.width) - SURFACE_WIDTH, x);
-            let top = placement_offset(f32::from(screen.height) - SURFACE_HEIGHT, y);
+            let top = custom_surface_top(f32::from(screen.height), y, 1.);
             Some((px(top), px(0.), px(0.), px(left)))
         }
         _ => None,
@@ -363,12 +356,225 @@ fn open(
     )?;
     #[cfg(target_os = "windows")]
     if let Err(error) = handle.update(cx, |_, window, _| {
-        configure_windows_overlay(window, position)
+        configure_windows_overlay(window, Some(position))
     })? {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
         return Err(error);
     }
     Ok(handle)
+}
+
+fn placement_display(cx: &App) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
+    cx.primary_display().or_else(|| {
+        // Wayland does not report a primary monitor.
+        cx.displays().into_iter().min_by_key(|display| {
+            let origin = display.bounds().origin;
+            (origin.x, origin.y, u64::from(display.id()))
+        })
+    })
+}
+
+type PlacementPoint = gpui::Point<gpui::Pixels>;
+
+pub struct PlacementEditor {
+    coordinates: (u16, u16),
+    grab_offset: Option<PlacementPoint>,
+    focus: gpui::FocusHandle,
+    super_key_style: SuperKeyStyle,
+    save: Box<dyn Fn(Position, &mut App) -> bool>,
+    drag_label: String,
+    save_label: String,
+    cancel_label: String,
+    error_label: String,
+    save_failed: bool,
+}
+
+pub fn edit_placement(
+    cx: &mut App,
+    position: Position,
+    super_key_style: SuperKeyStyle,
+    [drag_label, save_label, cancel_label, error_label]: [String; 4],
+    save: impl Fn(Position, &mut App) -> bool + 'static,
+) -> anyhow::Result<WindowHandle<PlacementEditor>> {
+    let display =
+        placement_display(cx).ok_or_else(|| anyhow::anyhow!("no display for placement editor"))?;
+    let coordinates = match position {
+        Position::Custom { x, y } => (x, y),
+        _ => (
+            ((i16::from(position.horizontal()) + 1) * 500) as u16,
+            if position.is_bottom() { 1000 } else { 0 },
+        ),
+    };
+    let handle = cx.open_window(
+        WindowOptions {
+            titlebar: None,
+            window_bounds: Some(WindowBounds::Windowed(display.bounds())),
+            display_id: Some(display.id()),
+            #[cfg(target_os = "windows")]
+            kind: WindowKind::PopUp,
+            #[cfg(target_os = "windows")]
+            show: false,
+            #[cfg(target_os = "linux")]
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "saiki-placement".into(),
+                layer: Layer::Overlay,
+                anchor: gpui::layer_shell::Anchor::all(),
+                exclusive_zone: Some(px(-1.)),
+                keyboard_interactivity: KeyboardInteractivity::OnDemand,
+                ..Default::default()
+            }),
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        |window, cx| {
+            cx.new(|cx| {
+                let focus = cx.focus_handle();
+                focus.focus(window, cx);
+                PlacementEditor {
+                    coordinates,
+                    grab_offset: None,
+                    focus,
+                    super_key_style,
+                    save: Box::new(save),
+                    drag_label,
+                    save_label,
+                    cancel_label,
+                    error_label,
+                    save_failed: false,
+                }
+            })
+        },
+    )?;
+    #[cfg(target_os = "windows")]
+    if let Err(error) = handle.update(cx, |_, window, _| configure_windows_overlay(window, None))? {
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        return Err(error);
+    }
+    Ok(handle)
+}
+
+impl PlacementEditor {
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (x, y) = self.coordinates;
+        if (self.save)(Position::Custom { x, y }, cx) {
+            window.remove_window();
+        } else {
+            self.save_failed = true;
+            cx.notify();
+        }
+    }
+}
+
+impl Render for PlacementEditor {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::{ClickEvent, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent};
+
+        let viewport = window.viewport_size();
+        let available = viewport - size(px(SURFACE_WIDTH), px(CARD_HEIGHT + 2. * GUTTER));
+        let (x, y) = self.coordinates;
+        let origin = point(
+            px(placement_offset(f32::from(available.width), x)),
+            px(custom_surface_top(f32::from(viewport.height), y, 1.) + custom_card_offset(y)),
+        );
+        div()
+            .relative()
+            .size_full()
+            .bg(rgba(0x00000025))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => window.remove_window(),
+                    "enter" => this.save(window, cx),
+                    _ => {}
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.grab_offset = None),
+            )
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if let Some(grab) = this.grab_offset {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.grab_offset = None;
+                        return;
+                    }
+                    let desired = event.position - grab;
+                    this.coordinates = (
+                        placement_coordinate(desired.x, available.width, this.coordinates.0),
+                        placement_coordinate(desired.y, available.height, this.coordinates.1),
+                    );
+                    cx.notify();
+                }
+            }))
+            .child(
+                card_view(
+                    &Content::Key(vec!["Ctrl".into(), "Shift".into(), "P".into()]),
+                    self.super_key_style,
+                )
+                .absolute()
+                .left(origin.x + px((SURFACE_WIDTH - CARD_WIDTH) / 2.))
+                .top(origin.y + px(GUTTER))
+                .w(px(CARD_WIDTH))
+                .justify_center()
+                .cursor_move()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                        let target = point(
+                            origin.x,
+                            px(placement_offset(f32::from(available.height), y)),
+                        );
+                        this.grab_offset = Some(event.position - target);
+                    }),
+                ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .when(y < 500, |bar| bar.bottom(px(12.)))
+                    .when(y >= 500, |bar| bar.top(px(12.)))
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .p(px(8.))
+                            .rounded(px(10.))
+                            .bg(rgb(SURFACE))
+                            .text_color(rgb(TEXT))
+                            .text_size(px(13.))
+                            .child(if self.save_failed {
+                                self.error_label.clone()
+                            } else {
+                                self.drag_label.clone()
+                            })
+                            .child(
+                                crate::controls::button("drag-save", self.save_label.clone(), true)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        this.save(window, cx)
+                                    })),
+                            )
+                            .child(
+                                crate::controls::button(
+                                    "drag-cancel",
+                                    self.cancel_label.clone(),
+                                    false,
+                                )
+                                .on_click(|_, window, _| window.remove_window()),
+                            ),
+                    ),
+            )
+    }
+}
+
+fn placement_coordinate(offset: gpui::Pixels, available: gpui::Pixels, current: u16) -> u16 {
+    if available <= px(0.) {
+        return current;
+    }
+    (1000. * (offset / available).clamp(0., 1.)).round() as u16
 }
 
 pub fn demo() -> impl IntoIterator<Item = Stroke> {
@@ -457,6 +663,21 @@ fn windows_key_icon() -> Div {
         }))
 }
 
+fn custom_card_offset(y: u16) -> f32 {
+    if y >= 500 {
+        SURFACE_HEIGHT - CARD_HEIGHT - 2. * GUTTER
+    } else {
+        0.
+    }
+}
+
+fn custom_surface_top(height: f32, y: u16, scale: f32) -> f32 {
+    let available = height - (CARD_HEIGHT + 2. * GUTTER) * scale;
+    (placement_offset(available, y) - custom_card_offset(y) * scale)
+        .round()
+        .clamp(0., (height - SURFACE_HEIGHT * scale).max(0.))
+}
+
 fn placement_offset(remaining: f32, position: u16) -> f32 {
     (remaining.max(0.) * f32::from(position) / 1000.).round()
 }
@@ -472,7 +693,7 @@ fn windows_overlay_bounds(
     if let Position::Custom { x, y } = position {
         let offset = point(
             gpui::DevicePixels(placement_offset(remaining.width.0 as f32, x) as i32),
-            gpui::DevicePixels(placement_offset(remaining.height.0 as f32, y) as i32),
+            gpui::DevicePixels(custom_surface_top(work_area.size.height.0 as f32, y, scale) as i32),
         );
         return Bounds::new(work_area.origin + offset, surface);
     }
@@ -490,7 +711,7 @@ fn windows_overlay_bounds(
 }
 
 #[cfg(target_os = "windows")]
-fn configure_windows_overlay(window: &Window, position: Position) -> anyhow::Result<()> {
+fn configure_windows_overlay(window: &Window, position: Option<Position>) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::{COLORREF, ERROR_SUCCESS, GetLastError, HWND, POINT, SetLastError},
@@ -527,17 +748,20 @@ fn configure_windows_overlay(window: &Window, position: Position) -> anyhow::Res
         let mut dpi_y = 0;
         GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y)?;
         let work = info.rcWork;
-        let bounds = windows_overlay_bounds(
-            position,
-            Bounds::new(
-                point(DevicePixels(work.left), DevicePixels(work.top)),
-                size(
-                    DevicePixels(work.right - work.left),
-                    DevicePixels(work.bottom - work.top),
-                ),
+        let work_area = Bounds::new(
+            point(DevicePixels(work.left), DevicePixels(work.top)),
+            size(
+                DevicePixels(work.right - work.left),
+                DevicePixels(work.bottom - work.top),
             ),
-            dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32,
         );
+        let bounds = position.map_or(work_area, |position| {
+            windows_overlay_bounds(
+                position,
+                work_area,
+                dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+            )
+        });
 
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         // A zero previous style is valid, so clear last-error before checking the result.
@@ -545,11 +769,14 @@ fn configure_windows_overlay(window: &Window, position: Position) -> anyhow::Res
         let previous = SetWindowLongW(
             hwnd,
             GWL_EXSTYLE,
-            ((style & !WS_EX_APPWINDOW.0)
+            ((style & !(WS_EX_APPWINDOW.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0))
                 | WS_EX_LAYERED.0
-                | WS_EX_TRANSPARENT.0
-                | WS_EX_NOACTIVATE.0
-                | WS_EX_TOOLWINDOW.0) as i32,
+                | WS_EX_TOOLWINDOW.0
+                | if position.is_some() {
+                    WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0
+                } else {
+                    0
+                }) as i32,
         );
         if previous == 0 && GetLastError() != ERROR_SUCCESS {
             return Err(windows::core::Error::from_win32().into());
@@ -597,6 +824,22 @@ mod tests {
     const TEST_DELAY: Duration = Duration::from_millis(1500);
 
     #[test]
+    fn custom_placement_keeps_the_card_at_the_dragged_height() {
+        let height = 1080.;
+        let available = px(height - CARD_HEIGHT - 2. * GUTTER);
+        for y in [0, 250, 499, 500, 750, 1000] {
+            let top = custom_surface_top(height, y, 1.);
+            let card_offset = top + custom_card_offset(y);
+            assert_eq!(card_offset, placement_offset(f32::from(available), y));
+            let dragged = placement_coordinate(px(card_offset), available, 0);
+            assert_eq!(placement_offset(f32::from(available), dragged), card_offset);
+            assert!(top >= 0. && top + SURFACE_HEIGHT <= height);
+        }
+        assert_eq!(placement_coordinate(px(-50.), available, 500), 0);
+        assert_eq!(placement_coordinate(px(height), available, 500), 1000);
+    }
+
+    #[test]
     fn windows_positions_use_the_scaled_surface_and_monitor_work_area() {
         use gpui::DevicePixels;
 
@@ -611,7 +854,7 @@ mod tests {
             (Position::BottomLeft, 64, 612),
             (Position::BottomCenter, 690, 612),
             (Position::BottomRight, 1317, 612),
-            (Position::Custom { x: 250, y: 750 }, 377, 467),
+            (Position::Custom { x: 250, y: 750 }, 377, 394),
         ] {
             let bounds = windows_overlay_bounds(position, work_area, 1.5);
             assert_eq!(
