@@ -41,21 +41,11 @@ pub fn check() -> Result<Option<Release>> {
         .limit(512 * 1024)
         .read_to_string()?;
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    #[cfg(target_os = "linux")]
-    let prefer_arch_package = std::fs::read_to_string("/etc/os-release")
-        .or_else(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => std::fs::read_to_string("/usr/lib/os-release"),
-            _ => Err(error),
-        })
-        .is_ok_and(|release| is_arch_family(&release));
-    #[cfg(not(target_os = "linux"))]
-    let prefer_arch_package = false;
     parse_release(
         &serde_json::from_str(&body)?,
         &current,
         std::env::consts::OS,
         std::env::consts::ARCH,
-        prefer_arch_package,
     )
 }
 
@@ -64,7 +54,6 @@ fn parse_release(
     current: &Version,
     os: &str,
     arch: &str,
-    prefer_arch_package: bool,
 ) -> Result<Option<Release>> {
     if release["draft"] == true || release["prerelease"] == true {
         return Ok(None);
@@ -77,32 +66,18 @@ fn parse_release(
 
     let download_url = release["assets"].as_array().and_then(|assets| {
         let names = assets.iter().filter_map(|asset| asset["name"].as_str());
-        let package = if os == "linux" && prefer_arch_package && arch == "x86_64" {
-            let prefix = format!("saiki-{version}-");
-            let suffix = format!("-{arch}.pkg.tar.zst");
-            names
-                .clone()
-                .find(|name| matches_arch_package(name, &prefix, &suffix))
-        } else {
-            None
+        let candidates: &[&str] = match (os, arch) {
+            ("windows", "x86_64") => {
+                &["saiki-windows-x86_64-setup.exe", "saiki-windows-x86_64.zip"]
+            }
+            ("windows", "aarch64") => &["saiki-windows-arm64-setup.exe", "saiki-windows-arm64.zip"],
+            ("linux", "x86_64") => &["saiki-linux-x86_64.tar.gz"],
+            ("linux", "aarch64") => &["saiki-linux-aarch64.tar.gz"],
+            _ => return None,
         };
-        package
-            .or_else(|| {
-                let candidates: &[&str] = match (os, arch) {
-                    ("windows", "x86_64") => {
-                        &["saiki-windows-x86_64-setup.exe", "saiki-windows-x86_64.zip"]
-                    }
-                    ("windows", "aarch64") => {
-                        &["saiki-windows-arm64-setup.exe", "saiki-windows-arm64.zip"]
-                    }
-                    ("linux", "x86_64") => &["saiki-linux-x86_64.tar.gz"],
-                    ("linux", "aarch64") => &["saiki-linux-aarch64.tar.gz"],
-                    _ => return None,
-                };
-                candidates
-                    .iter()
-                    .find_map(|expected| names.clone().find(|name| name == expected))
-            })
+        candidates
+            .iter()
+            .find_map(|expected| names.clone().find(|name| name == expected))
             .map(|name| format!("{RELEASES}/download/{tag}/{name}"))
     });
     Ok(Some(Release {
@@ -110,33 +85,6 @@ fn parse_release(
         page_url: format!("{RELEASES}/tag/{tag}"),
         download_url,
     }))
-}
-
-fn matches_arch_package(name: &str, prefix: &str, suffix: &str) -> bool {
-    name.strip_prefix(prefix)
-        .and_then(|rest| rest.strip_suffix(suffix))
-        .is_some_and(|pkgrel| {
-            pkgrel
-                .split('.')
-                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        })
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn is_arch_family(os_release: &str) -> bool {
-    os_release
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .any(|(key, value)| {
-            let value = value.trim_matches(['"', '\'']);
-            match key {
-                "ID" => matches!(value, "arch" | "archarm"),
-                "ID_LIKE" => value
-                    .split_ascii_whitespace()
-                    .any(|id| matches!(id, "arch" | "archarm")),
-                _ => false,
-            }
-        })
 }
 
 #[cfg(test)]
@@ -161,36 +109,14 @@ mod tests {
             ]
         });
         let current = Version::new(0, 9, 0);
-        for (os, arch, arch_family, asset) in [
-            (
-                "linux",
-                "x86_64",
-                true,
-                Some("saiki-0.10.0-1-x86_64.pkg.tar.zst"),
-            ),
-            ("linux", "aarch64", true, Some("saiki-linux-aarch64.tar.gz")),
-            ("linux", "x86_64", false, Some("saiki-linux-x86_64.tar.gz")),
-            (
-                "linux",
-                "aarch64",
-                false,
-                Some("saiki-linux-aarch64.tar.gz"),
-            ),
-            ("linux", "riscv64", false, None),
-            (
-                "windows",
-                "x86_64",
-                false,
-                Some("saiki-windows-x86_64-setup.exe"),
-            ),
-            (
-                "windows",
-                "aarch64",
-                false,
-                Some("saiki-windows-arm64-setup.exe"),
-            ),
+        for (os, arch, asset) in [
+            ("linux", "x86_64", Some("saiki-linux-x86_64.tar.gz")),
+            ("linux", "aarch64", Some("saiki-linux-aarch64.tar.gz")),
+            ("linux", "riscv64", None),
+            ("windows", "x86_64", Some("saiki-windows-x86_64-setup.exe")),
+            ("windows", "aarch64", Some("saiki-windows-arm64-setup.exe")),
         ] {
-            let release = parse_release(&metadata, &current, os, arch, arch_family)
+            let release = parse_release(&metadata, &current, os, arch)
                 .unwrap()
                 .unwrap();
             assert_eq!(release.version, Version::new(0, 10, 0));
@@ -210,7 +136,7 @@ mod tests {
             ("aarch64", "saiki-windows-arm64.zip"),
         ] {
             let metadata = json!({"tag_name":"v0.10.0","assets":[{"name":asset}]});
-            let release = parse_release(&metadata, &current, "windows", arch, false)
+            let release = parse_release(&metadata, &current, "windows", arch)
                 .unwrap()
                 .unwrap();
             assert_eq!(
@@ -221,29 +147,15 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_arch_distributions_and_derivatives() {
-        for release in [
-            "ID=arch",
-            "ID=archarm",
-            "ID=omarchy\nID_LIKE=arch",
-            "ID_LIKE=\"other arch\"",
-        ] {
-            assert!(is_arch_family(release), "{release}");
-        }
-        assert!(!is_arch_family("ID=ubuntu\nID_LIKE=debian"));
-        assert!(!is_arch_family("NAME=Arch Linux"));
-    }
-
-    #[test]
     fn handles_releases_with_only_one_linux_package_format() {
         let current = Version::new(0, 9, 0);
-        for (asset, prefer_arch, available) in [
-            ("saiki-0.10.0-1-x86_64.pkg.tar.zst", false, false),
-            ("saiki-linux-x86_64.tar.gz", true, true),
+        for (asset, available) in [
+            ("saiki-0.10.0-1-x86_64.pkg.tar.zst", false),
+            ("saiki-linux-x86_64.tar.gz", true),
         ] {
             let release = json!({"tag_name":"v0.10.0","assets":[{"name":asset}]});
             assert_eq!(
-                parse_release(&release, &current, "linux", "x86_64", prefer_arch)
+                parse_release(&release, &current, "linux", "x86_64")
                     .unwrap()
                     .unwrap()
                     .download_url
@@ -265,20 +177,13 @@ mod tests {
             json!({"tag_name": "v2.0.0", "prerelease": true}),
         ] {
             assert!(
-                parse_release(&metadata, &current, "windows", "x86_64", false)
+                parse_release(&metadata, &current, "windows", "x86_64")
                     .unwrap()
                     .is_none()
             );
         }
         assert!(
-            parse_release(
-                &json!({"tag_name": "invalid"}),
-                &current,
-                "linux",
-                "x86_64",
-                false
-            )
-            .is_err()
+            parse_release(&json!({"tag_name": "invalid"}), &current, "linux", "x86_64").is_err()
         );
     }
 }
