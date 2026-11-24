@@ -1,6 +1,6 @@
 [package]
 name = "saiki"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 description = "On-screen keypresses and keyboard shortcuts for Wayland and Windows"
 license = "MIT"
