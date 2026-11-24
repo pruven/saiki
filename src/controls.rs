@@ -1,4 +1,4 @@
-use crate::capture::{self, CaptureError, Keyboard};
+use crate::capture::{self, CaptureError, GamerMode, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
 use crate::settings::{FadeDelay, Position, SuperKeyStyle};
 use crate::updates;
@@ -11,7 +11,7 @@ use gpui::{
     actions, div, px, rgb, rgba, size,
 };
 use serde_json::Value;
-use std::{env, fs};
+use std::{env, fs, sync::atomic::Ordering};
 
 actions!(
     saiki,
@@ -31,6 +31,7 @@ pub struct Controls {
     capture: Option<Task<()>>,
     capturing: bool,
     shortcuts_only: bool,
+    gamer_mode: GamerMode,
     help: bool,
     error: Option<CaptureError>,
     overlay: Option<WindowHandle<Overlay>>,
@@ -74,6 +75,7 @@ impl Controls {
             capture: None,
             capturing: false,
             shortcuts_only: false,
+            gamer_mode: GamerMode::default(),
             help: false,
             error: (!layer_shell).then_some(CaptureError::Overlay),
             overlay: None,
@@ -93,9 +95,9 @@ impl Controls {
     pub fn show(cx: &mut App, state: &Entity<Self>) -> anyhow::Result<WindowHandle<Self>> {
         let focus = state.read(cx).focus.clone();
         let height = if cfg!(target_os = "linux") {
-            380.
+            412.
         } else {
-            420.
+            452.
         };
         let window = cx.open_window(
             WindowOptions {
@@ -109,7 +111,7 @@ impl Controls {
                     cx,
                 ))),
                 #[cfg(target_os = "windows")]
-                window_min_size: Some(size(px(360.), px(405.))),
+                window_min_size: Some(size(px(360.), px(437.))),
                 #[cfg(target_os = "linux")]
                 is_resizable: false,
                 app_id: Some("saiki".into()),
@@ -215,9 +217,10 @@ impl Controls {
             return;
         }
         self.error = None;
+        let gamer_mode = self.gamer_mode.clone();
         self.capture = Some(cx.spawn(async move |this, cx| {
             let result = capture::while_unlocked(async {
-                let mut keyboard = Keyboard::open().await?;
+                let mut keyboard = Keyboard::open(gamer_mode).await?;
                 this.update(cx, |this, cx| {
                     this.capturing = true;
                     let _ = this.tray_status.force_send("Capturing keys");
@@ -235,15 +238,22 @@ impl Controls {
                             {
                                 return Ok(());
                             }
-                            let strokes = keys
-                                .into_iter()
-                                .filter(|key| !this.shortcuts_only || key.is_shortcut());
+                            let strokes = keys.into_iter().filter(|key| {
+                                let is_game_key = matches!(
+                                    key,
+                                    capture::Stroke::GamePress { .. }
+                                        | capture::Stroke::GameRelease { .. }
+                                );
+                                is_game_key == this.gamer_mode.load(Ordering::Relaxed)
+                                    && (!this.shortcuts_only || key.is_shortcut())
+                            });
                             overlay::show(
                                 cx,
                                 &mut this.overlay,
                                 this.position,
                                 this.fade_delay.duration(),
                                 this.super_key_style,
+                                this.gamer_mode.load(Ordering::Relaxed),
                                 strokes,
                             )
                             .map_err(|_| CaptureError::Overlay)
@@ -283,6 +293,24 @@ impl Controls {
     }
 
     fn preview(&mut self, cx: &mut Context<Self>) {
+        let gamer_mode = self.gamer_mode.load(Ordering::Relaxed);
+        let strokes: Vec<_> = if gamer_mode {
+            ["Shift", "W", "Space", "LMB"]
+                .into_iter()
+                .zip(u32::MAX - 3..=u32::MAX)
+                .flat_map(|(key, code)| {
+                    [
+                        capture::Stroke::GamePress {
+                            code,
+                            label: key.into(),
+                        },
+                        capture::Stroke::GameRelease { code },
+                    ]
+                })
+                .collect()
+        } else {
+            overlay::demo().into_iter().collect()
+        };
         if self.layer_shell
             && overlay::show(
                 cx,
@@ -290,7 +318,8 @@ impl Controls {
                 self.position,
                 self.fade_delay.duration(),
                 self.super_key_style,
-                overlay::demo(),
+                gamer_mode,
+                strokes,
             )
             .is_err()
         {
@@ -772,6 +801,7 @@ impl Render for Controls {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.shortcuts_only = !this.shortcuts_only;
                         if this.shortcuts_only {
+                            this.gamer_mode.store(false, Ordering::Relaxed);
                             this.clear_overlay(cx);
                         }
                         cx.notify();
@@ -794,6 +824,21 @@ impl Render for Controls {
                     } else {
                         "Only show Ctrl, Alt or Super shortcuts"
                     })),
+            )
+            .child(
+                button(
+                    "gamer-mode",
+                    self.text("Gamer Mode"),
+                    self.gamer_mode.load(Ordering::Relaxed),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let was_enabled = this.gamer_mode.fetch_xor(true, Ordering::Relaxed);
+                    if !was_enabled {
+                        this.shortcuts_only = false;
+                    }
+                    this.clear_overlay(cx);
+                    cx.notify();
+                })),
             )
             .child(self.position_picker(cx))
             .child(self.fade_delay_control(cx))

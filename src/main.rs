@@ -128,6 +128,7 @@ fn run() -> Result<()> {
                 settings::Position::load(),
                 settings::FadeDelay::load().duration(),
                 settings::SuperKeyStyle::load(),
+                false,
                 overlay::demo(),
             )
         };

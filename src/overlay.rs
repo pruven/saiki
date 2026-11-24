@@ -15,6 +15,8 @@ const CARD_GAP: f32 = 7.;
 const GUTTER: f32 = 18.;
 const SURFACE_WIDTH: f32 = CARD_WIDTH + GUTTER + 44.;
 const MAX_CARDS: usize = 4;
+const GAME_SLOT_WIDTH: f32 = 82.;
+const GAME_CAP_HEIGHT: f32 = 42.;
 const SURFACE_HEIGHT: f32 = GUTTER + MAX_CARDS as f32 * (CARD_HEIGHT + CARD_GAP) + 34.;
 const ENTER: Duration = Duration::from_millis(360);
 const EXIT: Duration = Duration::from_millis(180);
@@ -30,9 +32,16 @@ enum Content {
     Key(Vec<String>),
 }
 
+struct GameKey {
+    code: u32,
+    slot: usize,
+    held: bool,
+}
+
 struct Card {
     content: Content,
     shortcut_presses: Option<usize>,
+    game_key: Option<GameKey>,
     born: Instant,
     last_key: Instant,
     from: f32,
@@ -51,8 +60,12 @@ impl Card {
         self.last_key + delay
     }
 
-    fn expires(&self, delay: Duration) -> Instant {
-        self.fade_at(delay) + EXIT
+    fn held(&self) -> bool {
+        self.game_key.as_ref().is_some_and(|key| key.held)
+    }
+
+    fn is_visible(&self, now: Instant, delay: Duration) -> bool {
+        self.held() || now < self.fade_at(delay) + EXIT
     }
 }
 
@@ -61,6 +74,7 @@ pub struct Overlay {
     delay: Duration,
     super_key_style: SuperKeyStyle,
     cards: Vec<Card>,
+    gamer_mode: bool,
     wake_at: Option<Instant>,
     wake: Option<Task<()>>,
 }
@@ -72,6 +86,7 @@ impl Overlay {
             delay,
             super_key_style,
             cards: Vec::new(),
+            gamer_mode: false,
             wake_at: None,
             wake: None,
         }
@@ -88,7 +103,24 @@ impl Overlay {
     }
 
     fn push(&mut self, stroke: Stroke, now: Instant) {
-        self.cards.retain(|card| card.expires(self.delay) > now);
+        self.cards.retain(|card| card.is_visible(now, self.delay));
+        match stroke {
+            Stroke::GamePress { code, label } => return self.press_game_key(code, label, now),
+            Stroke::GameRelease { code } => {
+                if let Some(card) = self.cards.iter_mut().find(|card| {
+                    card.game_key
+                        .as_ref()
+                        .is_some_and(|key| key.code == code && key.held)
+                }) {
+                    if let Some(key) = &mut card.game_key {
+                        key.held = false;
+                    }
+                    card.last_key = now;
+                }
+                return;
+            }
+            _ => {}
+        }
         if let Some(card) = self.cards.first_mut()
             && now < card.fade_at(self.delay)
             && let Content::Word { text, open } = &mut card.content
@@ -118,7 +150,7 @@ impl Overlay {
                     card.last_key = now;
                     return;
                 }
-                Stroke::Key { .. } => *open = false,
+                _ => *open = false,
             }
         }
 
@@ -159,6 +191,7 @@ impl Overlay {
             Stroke::Space => Content::Key(vec!["Space".into()]),
             Stroke::Backspace => Content::Key(vec!["Backspace".into()]),
             Stroke::Key { caps, .. } => Content::Key(caps),
+            Stroke::GamePress { .. } | Stroke::GameRelease { .. } => unreachable!(),
         };
         self.cards.truncate(MAX_CARDS - 1);
         self.cards.insert(
@@ -166,6 +199,7 @@ impl Overlay {
             Card {
                 content,
                 shortcut_presses,
+                game_key: None,
                 born: now,
                 last_key: now,
                 from: 0.,
@@ -174,6 +208,56 @@ impl Overlay {
             },
         );
         self.restack(now);
+    }
+
+    fn press_game_key(&mut self, code: u32, label: String, now: Instant) {
+        for card in &mut self.cards {
+            if let Some(key) = &mut card.game_key
+                && key.code == code
+            {
+                key.held = true;
+                return;
+            }
+        }
+
+        let free_slot = (0..MAX_CARDS).find(|slot| {
+            !self
+                .cards
+                .iter()
+                .any(|card| card.game_key.as_ref().is_some_and(|key| key.slot == *slot))
+        });
+        let slot = if let Some(slot) = free_slot {
+            slot
+        } else if let Some((index, _)) = self
+            .cards
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| !card.held())
+            .min_by_key(|(_, card)| card.last_key)
+        {
+            self.cards
+                .remove(index)
+                .game_key
+                .expect("Gamer Mode key")
+                .slot
+        } else {
+            return;
+        };
+
+        self.cards.push(Card {
+            content: Content::Key(vec![label]),
+            shortcut_presses: None,
+            game_key: Some(GameKey {
+                code,
+                slot,
+                held: true,
+            }),
+            born: now,
+            last_key: now,
+            from: 0.,
+            row: 0.,
+            moved: now,
+        });
     }
 
     fn restack(&mut self, now: Instant) {
@@ -191,13 +275,15 @@ impl Overlay {
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
-        self.cards.retain(|card| card.expires(self.delay) > now);
-        self.restack(now);
-        if self
-            .cards
-            .iter()
-            .any(|card| now - card.moved < ENTER || now >= card.fade_at(self.delay))
-        {
+        self.cards.retain(|card| card.is_visible(now, self.delay));
+        if !self.gamer_mode {
+            self.restack(now);
+        }
+        if self.cards.iter().any(|card| {
+            !card.held()
+                && (now >= card.fade_at(self.delay)
+                    || (card.game_key.is_none() && now - card.moved < ENTER))
+        }) {
             window.request_animation_frame();
         }
         if self.cards.is_empty() {
@@ -207,6 +293,7 @@ impl Render for Overlay {
         let next = self
             .cards
             .iter()
+            .filter(|card| !card.held())
             .map(|card| card.fade_at(self.delay))
             .filter(|deadline| *deadline > now)
             .min();
@@ -234,6 +321,37 @@ impl Render for Overlay {
             .size_full()
             .overflow_hidden()
             .children(self.cards.iter().rev().map(|card| {
+                if let Some(key) = &card.game_key {
+                    let left = match horizontal {
+                        -1 => GUTTER,
+                        1 => SURFACE_WIDTH - GUTTER - GAME_SLOT_WIDTH,
+                        _ => (SURFACE_WIDTH - GAME_SLOT_WIDTH) / 2.,
+                    };
+                    let offset = GUTTER + key.slot as f32 * (GAME_CAP_HEIGHT + CARD_GAP);
+                    let top = if self.position.is_bottom() {
+                        SURFACE_HEIGHT - GAME_CAP_HEIGHT - offset
+                    } else {
+                        offset
+                    };
+                    let exit = if key.held {
+                        0.
+                    } else {
+                        progress(
+                            now.saturating_duration_since(card.fade_at(self.delay)),
+                            EXIT,
+                        )
+                    };
+                    return div()
+                        .absolute()
+                        .left(px(left))
+                        .top(px(top))
+                        .w(px(GAME_SLOT_WIDTH))
+                        .flex()
+                        .when(horizontal == 1, |row| row.justify_end())
+                        .when(horizontal == 0, |row| row.justify_center())
+                        .opacity(1. - exit)
+                        .child(game_cap(&card.content, self.super_key_style, key.held));
+                }
                 let enter = progress(now - card.born, ENTER);
                 let exit = progress(
                     now.saturating_duration_since(card.fade_at(self.delay)),
@@ -275,6 +393,7 @@ pub fn show(
     position: Position,
     delay: Duration,
     super_key_style: SuperKeyStyle,
+    gamer_mode: bool,
     strokes: impl IntoIterator<Item = Stroke>,
 ) -> anyhow::Result<()> {
     let mut strokes = strokes.into_iter().peekable();
@@ -282,6 +401,7 @@ pub fn show(
         return Ok(());
     }
     let populate = |view: &mut Overlay| {
+        view.gamer_mode = gamer_mode;
         let now = Instant::now();
         for stroke in strokes {
             view.push(stroke, now);
@@ -307,22 +427,24 @@ pub fn relocate(
     let Some(handle) = overlay.take() else {
         return Ok(());
     };
-    let Ok((cards, delay, super_key_style)) = handle.update(cx, |view, window, _| {
+    let Ok((cards, delay, super_key_style, gamer_mode)) = handle.update(cx, |view, window, _| {
         window.remove_window();
         (
             std::mem::take(&mut view.cards),
             view.delay,
             view.super_key_style,
+            view.gamer_mode,
         )
     }) else {
         return Ok(());
     };
     if cards
         .iter()
-        .any(|card| card.expires(delay) > Instant::now())
+        .any(|card| card.is_visible(Instant::now(), delay))
     {
         *overlay = Some(open(cx, position, delay, super_key_style, |view| {
-            view.cards = cards
+            view.cards = cards;
+            view.gamer_mode = gamer_mode;
         })?);
     }
     Ok(())
@@ -629,6 +751,51 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .chain([Stroke::Space])
 }
 
+fn game_cap(content: &Content, super_key_style: SuperKeyStyle, held: bool) -> Div {
+    let Content::Key(caps) = content else {
+        unreachable!("Gamer Mode cards contain one keycap")
+    };
+    let label = &caps[0];
+    let face = if label == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon {
+        windows_key_icon()
+    } else {
+        div().min_w_0().text_ellipsis().child(label.clone())
+    };
+    div()
+        .h(px(GAME_CAP_HEIGHT))
+        .min_w(px(GAME_CAP_HEIGHT))
+        .max_w(px(GAME_SLOT_WIDTH))
+        .p(px(2.))
+        .pb(px(5.))
+        .rounded(px(10.))
+        .bg(rgb(if held { 0x533ea3 } else { 0x101015 }))
+        .border_1()
+        .border_color(rgb(if held { 0xb7a4ff } else { 0x41414e }))
+        .shadow(vec![
+            BoxShadow::new(px(0.), px(3.), rgba(0x00000065).into()).blur_radius(px(8.)),
+        ])
+        .when(held, |cap| {
+            cap.shadow(vec![
+                BoxShadow::new(px(0.), px(2.), rgba(0x00000065).into()).blur_radius(px(7.)),
+                BoxShadow::new(px(0.), px(0.), rgba(0x9773ff45).into()).blur_radius(px(15.)),
+            ])
+        })
+        .child(
+            div()
+                .h_full()
+                .px(px(8.))
+                .rounded(px(7.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(if held { 0x312453 } else { 0x23232d }))
+                .text_color(rgb(if held { 0xf6f0ff } else { 0xc1c0cc }))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(14.))
+                .child(face),
+        )
+}
+
 fn card_view(
     content: &Content,
     super_key_style: SuperKeyStyle,
@@ -880,6 +1047,35 @@ mod tests {
     const TEST_DELAY: Duration = Duration::from_millis(1500);
 
     #[test]
+    fn gamer_key_holds_its_slot_and_fades_from_release() {
+        let now = Instant::now();
+        let delay = Duration::from_secs(1);
+        let mut overlay = Overlay::new(Position::TopRight, delay, SuperKeyStyle::Text);
+        let press = |code, label: &str| Stroke::GamePress {
+            code,
+            label: label.into(),
+        };
+        overlay.push(press(1, "W"), now);
+        let later = now + delay + EXIT;
+        assert!(overlay.cards[0].is_visible(later, delay));
+        let slot = overlay.cards[0].game_key.as_ref().unwrap().slot;
+
+        overlay.push(Stroke::mouse_button(1, true).unwrap(), later);
+        assert!(overlay.cards[1].held());
+        overlay.push(Stroke::mouse_button(1, false).unwrap(), later);
+        assert!(!overlay.cards[1].held());
+        let faded = later + delay + EXIT;
+        overlay.push(press(3, "Shift"), faded);
+        assert_eq!(overlay.cards.len(), 2);
+        assert_eq!(overlay.cards[0].game_key.as_ref().unwrap().slot, slot);
+
+        overlay.push(Stroke::GameRelease { code: 1 }, faded);
+        assert!(!overlay.cards[0].held());
+        assert!(overlay.cards[0].is_visible(faded + delay, delay));
+        assert!(!overlay.cards[0].is_visible(faded + delay + EXIT, delay));
+    }
+
+    #[test]
     fn custom_placement_keeps_the_card_at_the_dragged_height() {
         let height = 1080.;
         let available = px(height - CARD_HEIGHT - 2. * GUTTER);
@@ -1059,6 +1255,6 @@ mod tests {
             .collect();
         assert_eq!(shown, ["7", "6", "5", "4"]);
         assert_eq!(overlay.cards[3].row, 3. * (CARD_HEIGHT + CARD_GAP));
-        assert!(overlay.cards[0].expires(overlay.delay) > overlay.cards[3].expires(overlay.delay));
+        assert!(overlay.cards[0].fade_at(overlay.delay) > overlay.cards[3].fade_at(overlay.delay));
     }
 }
