@@ -28,8 +28,8 @@ ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64
 MinVersion=10.0.22000
 #else
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible and not arm64
+ArchitecturesInstallIn64BitMode=x64compatible and not arm64
 MinVersion=10.0.14393
 #endif
 

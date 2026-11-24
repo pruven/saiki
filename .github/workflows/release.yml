@@ -134,6 +134,7 @@ jobs:
           test -f "$test_home/.local/share/applications/saiki.desktop"
           "$test_home/.local/bin/saiki-uninstall"
           test ! -e "$test_home/.local/bin/saiki"
+          test ! -e "$test_home/.local/share/applications/saiki.desktop"
           cd release
           tar -czf "$archive.tar.gz" "$archive"
           sha256sum "$archive.tar.gz" > "SHA256SUMS-archive-linux-$PACKAGE_ARCH"
@@ -188,6 +189,7 @@ jobs:
           $uninstall = Start-Process "$destination/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed: $($uninstall.ExitCode)" }
           if (Test-Path "$destination/saiki.exe") { throw 'Uninstall left the executable behind.' }
+          if (Test-Path "$env:APPDATA/Microsoft/Windows/Start Menu/Programs/Saiki.lnk") { throw 'Uninstall left the Start menu shortcut behind.' }
       - name: Package
         shell: pwsh
         run: |
