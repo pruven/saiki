@@ -310,21 +310,25 @@ impl Controls {
         cx.notify();
     }
 
-    fn pick_position(&mut self, position: Position, cx: &mut Context<Self>) {
-        self.pending_position = None;
-        self.profile_draft = None;
+    fn pick_position(&mut self, position: Position, cx: &mut Context<Self>) -> bool {
         if self.position != position {
-            self.position = position;
             if position.save().is_err() {
                 self.error = Some(CaptureError::Position);
-            } else if self.error == Some(CaptureError::Position) {
+                cx.notify();
+                return false;
+            }
+            self.position = position;
+            if self.error == Some(CaptureError::Position) {
                 self.error = None;
             }
             if overlay::relocate(cx, &mut self.overlay, position).is_err() {
                 self.error = Some(CaptureError::Overlay);
             }
         }
+        self.pending_position = None;
+        self.profile_draft = None;
         cx.notify();
+        true
     }
 
     fn position_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -333,7 +337,10 @@ impl Controls {
         };
         let key = event.keystroke.key.as_str();
         match key {
-            "enter" => return self.pick_position(selected, cx),
+            "enter" => {
+                self.pick_position(selected, cx);
+                return;
+            }
             "escape" => return self.toggle_position_picker(cx),
             _ => {}
         }
@@ -554,8 +561,7 @@ impl Controls {
             if self.error == Some(CaptureError::Position) {
                 self.error = None;
             }
-            self.pick_position(position, cx);
-            true
+            self.pick_position(position, cx)
         } else {
             self.error = Some(CaptureError::Position);
             cx.notify();
