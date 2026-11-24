@@ -97,6 +97,8 @@ Capture starts paused. On Linux it uses read-only access to the session’s keyb
     libssl3t64 ca-certificates xkb-data fonts-liberation
   ```
 
+The Linux archives include `runtime-packages-ubuntu-24.04.txt`, the runtime package list tested by CI. From the extracted directory on Ubuntu 24.04, you can also install it with `xargs sudo apt install -y < runtime-packages-ubuntu-24.04.txt`. Arch packages declare the OpenSSL library SONAMEs linked by the release binary, so pacman requires compatible libraries.
+
 Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout.
 
 ## Package and test
@@ -107,4 +109,4 @@ Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAI
 
 To build a Windows installer locally, install Inno Setup 6, run `bin/build.ps1`, then `bin/package.ps1`. For an ARM64 binary, pass `-Arch arm64` to the packaging script. The setup file is written to `release/`.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives with install/uninstall scripts and launcher assets, x86_64 Arch packages, Windows setup installers, and portable Windows ZIPs with SHA-256 checksums. Running the workflow manually builds downloadable artifacts.
+To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives with install/uninstall scripts and launcher assets, x86_64 Arch packages, Windows setup installers, and portable Windows ZIPs with SHA-256 checksums. CI installs the finished Linux packages in fresh containers with runtime dependencies and runs the installed executable with `--version`, checks for unresolved shared libraries, and checks the installed Windows executable with `--version`. These launch checks do not exercise the graphical overlay. Running the workflow manually builds downloadable artifacts.

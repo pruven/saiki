@@ -1,0 +1,14 @@
+libvulkan1
+libinput10
+libudev1
+libwayland-client0
+libwayland-cursor0
+libxkbcommon0
+libxkbcommon-x11-0
+libxcb1
+libfontconfig1
+libfreetype6
+libssl3t64
+ca-certificates
+xkb-data
+fonts-liberation

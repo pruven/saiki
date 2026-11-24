@@ -1,10 +1,11 @@
 pkgname=saiki
-pkgver=0.6.2
+pkgver=0.6.3
 pkgrel=1
 pkgdesc='On-screen keypresses and keyboard shortcuts for Wayland'
 arch=('x86_64' 'aarch64')
 license=('MIT')
-depends=('wayland' 'vulkan-icd-loader' 'vulkan-driver' 'libinput' 'libxkbcommon' 'libxkbcommon-x11' 'libxcb' 'fontconfig' 'ttf-font' 'systemd-libs' 'openssl' 'ca-certificates')
+# makepkg records the OpenSSL SONAME versions required by the finished ELF binary.
+depends=('wayland' 'vulkan-icd-loader' 'vulkan-driver' 'libinput' 'libxkbcommon' 'libxkbcommon-x11' 'libxcb' 'fontconfig' 'freetype2' 'ttf-font' 'systemd-libs' 'libssl.so' 'libcrypto.so' 'ca-certificates')
 makedepends=('rust' 'pkgconf')
 options=('!debug' '!lto')
 source=()

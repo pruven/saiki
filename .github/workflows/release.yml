@@ -84,6 +84,24 @@ jobs:
           cd "$RUNNER_TEMP/saiki-release"
           sha256sum saiki-*-"$PACKAGE_ARCH".pkg.tar.zst > "SHA256SUMS-linux-$PACKAGE_ARCH"
 
+      - name: Launch the finished Arch package in a clean runtime
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          VULKAN_DRIVER: ${{ matrix.vulkan_driver }}
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$RUNNER_TEMP/saiki-release,dst=/release,readonly" \
+            --env PACKAGE_ARCH --env VULKAN_DRIVER \
+            archlinux:base bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed "$VULKAN_DRIVER"
+              # Let pacman resolve only the dependencies declared by the built package.
+              pacman -U --noconfirm /release/saiki-*-"$PACKAGE_ARCH".pkg.tar.zst
+              ldd /usr/bin/saiki | tee /tmp/saiki-libraries
+              ! grep -q "not found" /tmp/saiki-libraries
+              useradd --create-home tester
+              runuser -u tester -- /usr/bin/saiki --version
+            '
+
       - uses: actions/upload-artifact@v6
         with:
           name: saiki-arch-${{ matrix.arch }}
@@ -125,7 +143,7 @@ jobs:
           archive="saiki-linux-$PACKAGE_ARCH"
           mkdir -p "release/$archive"
           install -m755 build/saiki "release/$archive/saiki"
-          install -m644 README.md LICENSE "release/$archive/"
+          install -m644 README.md LICENSE packaging/linux/runtime-packages-ubuntu-24.04.txt "release/$archive/"
           install -m755 packaging/linux/install.sh packaging/linux/uninstall.sh "release/$archive/"
           install -m644 pkgbuild/saiki.desktop pkgbuild/saiki.svg "release/$archive/"
           test_home=$(mktemp -d)
@@ -138,6 +156,28 @@ jobs:
           cd release
           tar -czf "$archive.tar.gz" "$archive"
           sha256sum "$archive.tar.gz" > "SHA256SUMS-archive-linux-$PACKAGE_ARCH"
+      - name: Install and launch the finished archive in a clean runtime
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/release,dst=/release,readonly" \
+            --env PACKAGE_ARCH ubuntu:24.04 bash -euo pipefail -c '
+              apt-get update
+              mkdir /tmp/saiki
+              tar -xzf "/release/saiki-linux-$PACKAGE_ARCH.tar.gz" -C /tmp/saiki
+              archive="/tmp/saiki/saiki-linux-$PACKAGE_ARCH"
+              xargs -r apt-get install -y --no-install-recommends < "$archive/runtime-packages-ubuntu-24.04.txt"
+              useradd --create-home tester
+              runuser -u tester -- sh "$archive/install.sh"
+              ldd /home/tester/.local/bin/saiki | tee /tmp/saiki-libraries
+              ! grep -q "not found" /tmp/saiki-libraries
+              runuser -u tester -- /home/tester/.local/bin/saiki --version
+              test -f /home/tester/.local/share/applications/saiki.desktop
+              runuser -u tester -- /home/tester/.local/bin/saiki-uninstall
+              test ! -e /home/tester/.local/bin/saiki
+              test ! -e /home/tester/.local/share/applications/saiki.desktop
+            '
       - uses: actions/upload-artifact@v6
         with:
           name: saiki-linux-${{ matrix.arch }}
@@ -186,6 +226,8 @@ jobs:
           if ($setup.ExitCode -ne 0) { throw "Setup failed: $($setup.ExitCode)" }
           if (!(Test-Path "$destination/saiki.exe")) { throw 'Installed executable is missing.' }
           if (!(Test-Path "$env:APPDATA/Microsoft/Windows/Start Menu/Programs/Saiki.lnk")) { throw 'Start menu shortcut is missing.' }
+          $launch = Start-Process "$destination/saiki.exe" -ArgumentList '--version' -Wait -PassThru
+          if ($launch.ExitCode -ne 0) { throw "Installed executable failed to launch: $($launch.ExitCode)" }
           $uninstall = Start-Process "$destination/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed: $($uninstall.ExitCode)" }
           if (Test-Path "$destination/saiki.exe") { throw 'Uninstall left the executable behind.' }
