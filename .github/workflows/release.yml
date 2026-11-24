@@ -126,6 +126,14 @@ jobs:
           mkdir -p "release/$archive"
           install -m755 build/saiki "release/$archive/saiki"
           install -m644 README.md LICENSE "release/$archive/"
+          install -m755 packaging/linux/install.sh packaging/linux/uninstall.sh "release/$archive/"
+          install -m644 pkgbuild/saiki.desktop pkgbuild/saiki.svg "release/$archive/"
+          test_home=$(mktemp -d)
+          HOME="$test_home" sh "release/$archive/install.sh"
+          "$test_home/.local/bin/saiki" --version
+          test -f "$test_home/.local/share/applications/saiki.desktop"
+          "$test_home/.local/bin/saiki-uninstall"
+          test ! -e "$test_home/.local/bin/saiki"
           cd release
           tar -czf "$archive.tar.gz" "$archive"
           sha256sum "$archive.tar.gz" > "SHA256SUMS-archive-linux-$PACKAGE_ARCH"
@@ -162,6 +170,24 @@ jobs:
         run: ./bin/test.ps1 -Target ${{ matrix.target }}
       - name: Build
         run: ./bin/build.ps1 -Target ${{ matrix.target }}
+      - name: Install packaging tools
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+      - name: Build installer
+        run: ./bin/package.ps1 -Arch ${{ matrix.arch }}
+      - name: Test installation and uninstall
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'Saiki install test'
+          $setup = Start-Process "release/saiki-windows-${{ matrix.arch }}-setup.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destination`"" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Setup failed: $($setup.ExitCode)" }
+          if (!(Test-Path "$destination/saiki.exe")) { throw 'Installed executable is missing.' }
+          if (!(Test-Path "$env:APPDATA/Microsoft/Windows/Start Menu/Programs/Saiki.lnk")) { throw 'Start menu shortcut is missing.' }
+          $uninstall = Start-Process "$destination/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed: $($uninstall.ExitCode)" }
+          if (Test-Path "$destination/saiki.exe") { throw 'Uninstall left the executable behind.' }
       - name: Package
         shell: pwsh
         run: |
@@ -170,6 +196,9 @@ jobs:
           Compress-Archive -Path build/saiki.exe, README.md, LICENSE -DestinationPath "release/$archive"
           $hash = (Get-FileHash "release/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content release/SHA256SUMS-windows-${{ matrix.arch }} -Encoding ascii
+          $installer = "saiki-windows-${{ matrix.arch }}-setup.exe"
+          $hash = (Get-FileHash "release/$installer" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $installer" | Add-Content release/SHA256SUMS-windows-${{ matrix.arch }} -Encoding ascii
       - uses: actions/upload-artifact@v6
         with:
           name: saiki-windows-${{ matrix.arch }}
