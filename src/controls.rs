@@ -305,11 +305,7 @@ impl Controls {
             None
         } else {
             self.help = false;
-            Some(if Position::ALL.contains(&self.position) {
-                self.position
-            } else {
-                Position::default()
-            })
+            Some(self.position)
         };
         cx.notify();
     }
@@ -335,17 +331,21 @@ impl Controls {
         let Some(selected) = self.pending_position else {
             return;
         };
+        let key = event.keystroke.key.as_str();
+        match key {
+            "enter" => return self.pick_position(selected, cx),
+            "escape" => return self.toggle_position_picker(cx),
+            _ => {}
+        }
         let index = Position::ALL
             .iter()
             .position(|position| *position == selected)
-            .unwrap();
-        let target = match event.keystroke.key.as_str() {
+            .unwrap_or(2); // Start arrow navigation from the top-right preset.
+        let target = match key {
             "left" => index / 3 * 3 + (index % 3).saturating_sub(1),
             "right" => index / 3 * 3 + (index % 3 + 1).min(2),
             "up" => index % 3,
             "down" => 3 + index % 3,
-            "enter" => return self.pick_position(selected, cx),
-            "escape" => return self.toggle_position_picker(cx),
             _ => return,
         };
         self.pending_position = Some(Position::ALL[target]);
