@@ -58,7 +58,10 @@ impl Position {
     pub fn is_bottom(self) -> bool {
         matches!(
             self,
-            Self::BottomLeft | Self::BottomCenter | Self::BottomRight
+            Self::BottomLeft
+                | Self::BottomCenter
+                | Self::BottomRight
+                | Self::Custom { y: 500.., .. }
         )
     }
 

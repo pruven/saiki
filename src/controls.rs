@@ -34,6 +34,7 @@ pub struct Controls {
     help: bool,
     error: Option<CaptureError>,
     overlay: Option<WindowHandle<Overlay>>,
+    placement_editor: Option<WindowHandle<overlay::PlacementEditor>>,
     position: Position,
     position_profiles: Vec<Position>,
     profile_draft: Option<Position>,
@@ -76,6 +77,7 @@ impl Controls {
             help: false,
             error: (!layer_shell).then_some(CaptureError::Overlay),
             overlay: None,
+            placement_editor: None,
             position: Position::load(),
             position_profiles: Position::load_profiles(),
             profile_draft: None,
@@ -227,6 +229,12 @@ impl Controls {
                     let keys = keyboard.next_strokes().await?;
                     if !keys.is_empty() {
                         this.update(cx, |this, cx| {
+                            if this
+                                .placement_editor
+                                .is_some_and(|editor| editor.read(cx).is_ok())
+                            {
+                                return Ok(());
+                            }
                             let strokes = keys
                                 .into_iter()
                                 .filter(|key| !this.shortcuts_only || key.is_shortcut());
@@ -492,21 +500,66 @@ impl Controls {
         format!("{} {}", self.text("Profile"), index + 1)
     }
 
+    fn edit_overlay_placement(&mut self, cx: &mut Context<Self>) {
+        if !self.layer_shell
+            || self
+                .placement_editor
+                .is_some_and(|editor| editor.read(cx).is_ok())
+        {
+            return;
+        }
+        let controls = cx.entity().downgrade();
+        let labels = [
+            self.text("Drag the overlay"),
+            self.text("Save profile"),
+            self.text("Cancel"),
+            self.text("Could not save the profile"),
+        ];
+        self.clear_overlay(cx);
+        match overlay::edit_placement(
+            cx,
+            self.position,
+            self.super_key_style,
+            labels,
+            move |position, cx| {
+                controls
+                    .update(cx, |this, cx| this.add_position_profile(position, cx))
+                    .unwrap_or(false)
+            },
+        ) {
+            Ok(editor) => self.placement_editor = Some(editor),
+            Err(_) => {
+                self.error = Some(CaptureError::Overlay);
+                cx.notify();
+            }
+        }
+    }
+
+    fn add_position_profile(&mut self, position: Position, cx: &mut Context<Self>) -> bool {
+        let mut profiles = self.position_profiles.clone();
+        if !profiles.contains(&position) {
+            profiles.push(position);
+        }
+        self.save_position_profiles(profiles, position, cx)
+    }
+
     fn save_position_profiles(
         &mut self,
         profiles: Vec<Position>,
         position: Position,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if Position::save_profiles(&profiles).is_ok() {
             self.position_profiles = profiles;
             if self.error == Some(CaptureError::Position) {
                 self.error = None;
             }
             self.pick_position(position, cx);
+            true
         } else {
             self.error = Some(CaptureError::Position);
             cx.notify();
+            false
         }
     }
 
@@ -522,6 +575,11 @@ impl Controls {
             .flex_col()
             .gap(px(6.))
             .text_size(px(13.))
+            .child(
+                button("drag-overlay", self.text("Drag overlay"), false).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.edit_overlay_placement(cx)),
+                ),
+            )
             .child(self.text("Click the map to place the overlay"))
             .child(
                 div()
@@ -584,11 +642,7 @@ impl Controls {
                 picker.child(
                     button("save-profile", self.text("Save profile"), true).on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
-                            let mut profiles = this.position_profiles.clone();
-                            if !profiles.contains(&position) {
-                                profiles.push(position);
-                            }
-                            this.save_position_profiles(profiles, position, cx);
+                            this.add_position_profile(position, cx);
                         },
                     )),
                 )
@@ -864,7 +918,11 @@ fn keyboard_mark() -> Div {
         )
 }
 
-fn button(id: impl Into<gpui::ElementId>, text: String, primary: bool) -> gpui::Stateful<Div> {
+pub(crate) fn button(
+    id: impl Into<gpui::ElementId>,
+    text: String,
+    primary: bool,
+) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .cursor_pointer()
