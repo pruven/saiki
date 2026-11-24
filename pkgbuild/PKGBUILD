@@ -1,5 +1,5 @@
 pkgname=saiki
-pkgver=0.6.1
+pkgver=0.6.2
 pkgrel=1
 pkgdesc='On-screen keypresses and keyboard shortcuts for Wayland'
 arch=('x86_64' 'aarch64')
