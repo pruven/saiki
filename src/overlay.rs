@@ -32,6 +32,7 @@ enum Content {
 
 struct Card {
     content: Content,
+    shortcut_presses: Option<usize>,
     born: Instant,
     last_key: Instant,
     from: f32,
@@ -121,6 +122,35 @@ impl Overlay {
             }
         }
 
+        if let Stroke::Key {
+            caps,
+            shortcut: true,
+        } = &stroke
+        {
+            // Capture shows Super on key-down. Consume that card when the chord arrives.
+            if caps.iter().rev().skip(1).any(|cap| cap == SUPER_KEY)
+                && let Some(Card {
+                    content: Content::Key(previous),
+                    ..
+                }) = self.cards.first()
+                && previous.last().is_some_and(|cap| cap == SUPER_KEY)
+            {
+                self.cards.remove(0);
+            }
+
+            if let Some(card) = self.cards.first_mut()
+                && let Content::Key(previous) = &card.content
+                && previous == caps
+                && let Some(presses) = &mut card.shortcut_presses
+            {
+                *presses = presses.saturating_add(1);
+                card.last_key = now;
+                self.restack(now);
+                return;
+            }
+        }
+
+        let shortcut_presses = stroke.is_shortcut().then_some(1);
         let content = match stroke {
             Stroke::Text(character) => Content::Word {
                 text: character.to_string(),
@@ -135,6 +165,7 @@ impl Overlay {
             0,
             Card {
                 content,
+                shortcut_presses,
                 born: now,
                 last_key: now,
                 from: 0.,
@@ -225,7 +256,11 @@ impl Render for Overlay {
                     .when(horizontal == 1, |row| row.justify_end())
                     .when(horizontal == 0, |row| row.justify_center())
                     .opacity((enter * 2.7).min(1.) * (1. - exit))
-                    .child(card_view(&card.content, self.super_key_style))
+                    .child(card_view(
+                        &card.content,
+                        self.super_key_style,
+                        card.shortcut_presses,
+                    ))
             }))
     }
 }
@@ -510,6 +545,7 @@ impl Render for PlacementEditor {
                 card_view(
                     &Content::Key(vec!["Ctrl".into(), "Shift".into(), "P".into()]),
                     self.super_key_style,
+                    None,
                 )
                 .absolute()
                 .left(origin.x + px((SURFACE_WIDTH - CARD_WIDTH) / 2.))
@@ -593,7 +629,11 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .chain([Stroke::Space])
 }
 
-fn card_view(content: &Content, super_key_style: SuperKeyStyle) -> Div {
+fn card_view(
+    content: &Content,
+    super_key_style: SuperKeyStyle,
+    shortcut_presses: Option<usize>,
+) -> Div {
     let keys = match content {
         Content::Word { text, .. } => div()
             .text_color(rgb(TEXT))
@@ -647,7 +687,19 @@ fn card_view(content: &Content, super_key_style: SuperKeyStyle) -> Div {
             BoxShadow::new(px(0.), px(2.), rgba(0x00000045).into()).blur_radius(px(6.)),
             BoxShadow::new(px(0.), px(8.), rgba(0x00000050).into()).blur_radius(px(24.)),
         ])
-        .child(keys)
+        .child(keys.min_w_0())
+        .when_some(
+            shortcut_presses.filter(|&presses| presses > 1),
+            |card, presses| {
+                card.gap(px(8.)).child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(MUTED))
+                        .text_size(px(13.))
+                        .child(format!("×{presses}")),
+                )
+            },
+        )
 }
 
 fn windows_key_icon() -> Div {
@@ -926,6 +978,58 @@ mod tests {
         );
         overlay.push(Stroke::Backspace, later);
         assert!(overlay.cards.is_empty());
+    }
+
+    #[test]
+    fn repeated_shortcuts_share_a_card_and_refresh_its_timeout() {
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
+        let now = Instant::now();
+        let shortcut = || Stroke::Key {
+            caps: vec!["Ctrl".into(), "C".into()],
+            shortcut: true,
+        };
+        overlay.push(shortcut(), now);
+        let repeat = now + TEST_DELAY;
+        overlay.push(shortcut(), repeat);
+        assert_eq!(overlay.cards.len(), 1);
+        assert_eq!(overlay.cards[0].shortcut_presses, Some(2));
+        assert_eq!(overlay.cards[0].fade_at(TEST_DELAY), repeat + TEST_DELAY);
+
+        overlay.push(Stroke::Text('a'), repeat);
+        overlay.push(shortcut(), repeat);
+        assert_eq!(overlay.cards.len(), 3);
+        assert_eq!(overlay.cards[0].shortcut_presses, Some(1));
+        overlay.push(shortcut(), repeat + TEST_DELAY + EXIT);
+        assert_eq!(overlay.cards.len(), 1);
+        assert_eq!(overlay.cards[0].shortcut_presses, Some(1));
+    }
+
+    #[test]
+    fn pressing_super_again_before_the_same_chord_keeps_one_card() {
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
+        let now = Instant::now();
+        for _ in 0..3 {
+            overlay.push(
+                Stroke::Key {
+                    caps: vec![SUPER_KEY.into()],
+                    shortcut: true,
+                },
+                now,
+            );
+            overlay.push(
+                Stroke::Key {
+                    caps: vec![SUPER_KEY.into(), "Space".into()],
+                    shortcut: true,
+                },
+                now,
+            );
+        }
+        assert_eq!(overlay.cards.len(), 1);
+        assert_eq!(
+            overlay.cards[0].content,
+            Content::Key(vec![SUPER_KEY.into(), "Space".into()])
+        );
+        assert_eq!(overlay.cards[0].shortcut_presses, Some(3));
     }
 
     #[test]
