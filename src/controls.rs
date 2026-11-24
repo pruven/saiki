@@ -295,7 +295,7 @@ impl Controls {
     fn preview(&mut self, cx: &mut Context<Self>) {
         let gamer_mode = self.gamer_mode.load(Ordering::Relaxed);
         let strokes: Vec<_> = if gamer_mode {
-            ["Shift", "W", "Space", "LMB"]
+            ["Shift", "W", "Space"]
                 .into_iter()
                 .zip(u32::MAX - 3..=u32::MAX)
                 .flat_map(|(key, code)| {
@@ -307,6 +307,11 @@ impl Controls {
                         capture::Stroke::GameRelease { code },
                     ]
                 })
+                .chain(
+                    [true, false]
+                        .into_iter()
+                        .filter_map(|pressed| capture::Stroke::mouse_button(1, pressed)),
+                )
                 .collect()
         } else {
             overlay::demo().into_iter().collect()

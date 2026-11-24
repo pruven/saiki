@@ -1,4 +1,4 @@
-use crate::capture::{SUPER_KEY, Stroke};
+use crate::capture::{MOUSE_BUTTON_BASE, SUPER_KEY, Stroke};
 use crate::settings::{Position, SuperKeyStyle};
 #[cfg(target_os = "linux")]
 use gpui::layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions};
@@ -350,7 +350,7 @@ impl Render for Overlay {
                         .when(horizontal == 1, |row| row.justify_end())
                         .when(horizontal == 0, |row| row.justify_center())
                         .opacity(1. - exit)
-                        .child(game_cap(&card.content, self.super_key_style, key.held));
+                        .child(game_cap(&card.content, self.super_key_style, key));
                 }
                 let enter = progress(now - card.born, ENTER);
                 let exit = progress(
@@ -751,12 +751,16 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .chain([Stroke::Space])
 }
 
-fn game_cap(content: &Content, super_key_style: SuperKeyStyle, held: bool) -> Div {
+fn game_cap(content: &Content, super_key_style: SuperKeyStyle, key: &GameKey) -> Div {
     let Content::Key(caps) = content else {
         unreachable!("Gamer Mode cards contain one keycap")
     };
     let label = &caps[0];
-    let face = if label == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon {
+    let held = key.held;
+    let mouse_button = key.code.wrapping_sub(MOUSE_BUTTON_BASE);
+    let face = if (1..=5).contains(&mouse_button) {
+        mouse_button_icon(mouse_button, held)
+    } else if label == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon {
         windows_key_icon()
     } else {
         div().min_w_0().text_ellipsis().child(label.clone())
@@ -794,6 +798,63 @@ fn game_cap(content: &Content, super_key_style: SuperKeyStyle, held: bool) -> Di
                 .text_size(px(14.))
                 .child(face),
         )
+}
+
+fn mouse_button_icon(button: u32, held: bool) -> Div {
+    let outline = rgb(if held { 0xdbcfff } else { 0xaaa6b8 });
+    let active = rgb(if held { 0xdccaff } else { 0xb3a7d2 });
+    div()
+        .relative()
+        .w(px(22.))
+        .h(px(25.))
+        .child(
+            div()
+                .absolute()
+                .left(px(3.))
+                .w(px(17.))
+                .h_full()
+                .rounded(px(7.))
+                .border_1()
+                .border_color(outline)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .h(px(10.))
+                        .border_b_1()
+                        .border_color(outline)
+                        .children((1..=2).map(|side| {
+                            div()
+                                .flex_1()
+                                .when(button == side, |panel| panel.bg(active))
+                                .when(side == 1, |panel| panel.border_r_1().border_color(outline))
+                        })),
+                ),
+        )
+        .when(button == 3, |icon| {
+            icon.child(
+                div()
+                    .absolute()
+                    .left(px(9.5))
+                    .top(px(3.))
+                    .w(px(4.))
+                    .h(px(7.))
+                    .rounded(px(2.))
+                    .bg(active),
+            )
+        })
+        .when(button == 4 || button == 5, |icon| {
+            icon.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(if button == 4 { 8. } else { 14. }))
+                    .w(px(5.))
+                    .h(px(4.))
+                    .rounded(px(2.))
+                    .bg(active),
+            )
+        })
 }
 
 fn card_view(

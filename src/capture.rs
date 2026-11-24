@@ -12,6 +12,7 @@ pub use linux::{Keyboard, while_unlocked};
 pub use windows::{Keyboard, while_unlocked};
 
 pub const SUPER_KEY: &str = "Super";
+pub const MOUSE_BUTTON_BASE: u32 = 0x8000_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureError {
@@ -68,7 +69,7 @@ impl Stroke {
             5 => "Mouse 5",
             _ => return None,
         };
-        let code = 0x8000_0000 | button;
+        let code = MOUSE_BUTTON_BASE + button;
         Some(if pressed {
             Self::GamePress {
                 code,
