@@ -18,12 +18,6 @@ This installs Saiki in `~/.local/bin` and adds its icon to your application laun
 
 The Linux builds require glibc 2.39 or newer and the [Linux runtime dependencies](#linux-requirements). For older distributions, build from source.
 
-### Arch packages
-
-Download the `x86_64` package for Arch Linux from [GitHub Releases](https://github.com/pruven/saiki/releases/latest). From the download directory, install it with `sudo pacman -U ./saiki-*-x86_64.pkg.tar.zst`. ARM64 users can use the Linux archive described above.
-
-Open Saiki from your launcher or run `saiki`.
-
 ## Install on Windows
 
 Download `saiki-windows-x86_64-setup.exe` for Intel/AMD PCs or `saiki-windows-arm64-setup.exe` for ARM PCs from [Downloads](https://github.com/pruven/saiki/releases/latest). Open the setup file and follow the installation wizard. Then open **Saiki** from the Start menu. Setup installs for your account without administrator access, offers an optional desktop shortcut, and adds Saiki to **Settings → Apps** for uninstalling. To update, quit Saiki from the tray and run the newer setup file; your settings are kept. ZIP downloads remain available for portable use.
@@ -107,4 +101,4 @@ Run `bin/test` for keyboard layout, modifier, and stack ordering tests. Use `SAI
 
 To build a Windows installer locally, install Inno Setup 6, run `bin/build.ps1`, then `bin/package.ps1`. For an ARM64 binary, pass `-Arch arm64` to the packaging script. The setup file is written to `release/`.
 
-To publish a release, match the versions in `Cargo.toml` and `pkgbuild/PKGBUILD`, update `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives with install/uninstall scripts and launcher assets, x86_64 Arch packages, Windows setup installers, and portable Windows ZIPs with SHA-256 checksums. Running the workflow manually builds downloadable artifacts.
+To publish a release, match the versions in `Cargo.toml` and `Cargo.lock`, and push the matching `vX.Y.Z` tag. GitHub Actions builds and tests Linux and Windows on native x64 and ARM64 runners. It publishes Linux archives with install/uninstall scripts and launcher assets, Windows setup installers, and portable Windows ZIPs with SHA-256 checksums. Running the workflow manually builds downloadable artifacts.
