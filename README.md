@@ -92,12 +92,12 @@ Capture starts paused. On Linux it uses read-only access to the session’s keyb
 - A Vulkan driver, libinput, libudev, Wayland client libraries, xkbcommon, libxcb, Fontconfig, FreeType, system fonts, OpenSSL 3, and CA certificates. On Arch, see [PKGBUILD](pkgbuild/PKGBUILD) for package names. On Ubuntu 24.04, install the runtime libraries with:
 
   ```sh
-  sudo apt install libvulkan1 libinput10 libudev1 libwayland-client0 libwayland-cursor0 \
+  sudo apt install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers libinput10 libudev1 libwayland-client0 libwayland-cursor0 \
     libxkbcommon0 libxkbcommon-x11-0 libxcb1 libfontconfig1 libfreetype6 \
     libssl3t64 ca-certificates xkb-data fonts-liberation
   ```
 
-The Linux archives include `runtime-packages-ubuntu-24.04.txt`, the runtime package list tested by CI. From the extracted directory on Ubuntu 24.04, you can also install it with `xargs sudo apt install -y < runtime-packages-ubuntu-24.04.txt`. Arch packages declare the OpenSSL library SONAMEs linked by the release binary, so pacman requires compatible libraries.
+The Linux archives include `runtime-packages-ubuntu-24.04.txt`, the runtime package list tested by CI. From the extracted directory on Ubuntu 24.04, you can also install it with `xargs sudo apt install -y --no-install-recommends < runtime-packages-ubuntu-24.04.txt`. Arch packages declare the OpenSSL library SONAMEs linked by the release binary, so pacman requires compatible libraries.
 
 Saiki reads Hyprland’s main keyboard layout and active group when you start capture. On other compositors it uses xkbcommon’s defaults. Set `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, or `XKB_DEFAULT_OPTIONS` when launching Saiki to choose a layout explicitly. It shows physical keypresses and modifier chords. Text committed by IMEs and compose sequences is outside the overlay’s scope on either platform. Windows uses the foreground application’s keyboard layout.
 

@@ -1,4 +1,5 @@
 libvulkan1
+mesa-vulkan-drivers
 libinput10
 libudev1
 libwayland-client0

@@ -98,6 +98,8 @@ jobs:
               pacman -U --noconfirm /release/saiki-*-"$PACKAGE_ARCH".pkg.tar.zst
               ldd /usr/bin/saiki | tee /tmp/saiki-libraries
               ! grep -q "not found" /tmp/saiki-libraries
+              # Vulkan is loaded at runtime, so ldd and --version cannot check it.
+              ldconfig -p | grep -F "libvulkan.so.1 "
               useradd --create-home tester
               runuser -u tester -- /usr/bin/saiki --version
             '
@@ -172,6 +174,8 @@ jobs:
               runuser -u tester -- sh "$archive/install.sh"
               ldd /home/tester/.local/bin/saiki | tee /tmp/saiki-libraries
               ! grep -q "not found" /tmp/saiki-libraries
+              # Vulkan is loaded at runtime, so ldd and --version cannot check it.
+              ldconfig -p | grep -F "libvulkan.so.1 "
               runuser -u tester -- /home/tester/.local/bin/saiki --version
               test -f /home/tester/.local/share/applications/saiki.desktop
               runuser -u tester -- /home/tester/.local/bin/saiki-uninstall
