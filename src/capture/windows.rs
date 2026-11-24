@@ -103,16 +103,15 @@ impl Keyboard {
                 Some(GetModuleHandleW(None).unwrap_or_default().into()),
                 0,
             );
-            let Ok(mouse) = mouse else {
-                let _ = UnhookWindowsHookEx(hook);
-                CAPTURE.with(|state| state.borrow_mut().take());
-                let _ = ready.try_send(Err(CaptureError::Device));
-                return;
-            };
+            if let Err(error) = &mouse {
+                eprintln!("saiki: mouse capture unavailable: {error}");
+            }
             // A timer also pauses capture when the session locks without a key event.
             let timer = SetTimer(None, 1, 100, None);
             if timer == 0 {
-                let _ = UnhookWindowsHookEx(mouse);
+                if let Ok(mouse) = mouse {
+                    let _ = UnhookWindowsHookEx(mouse);
+                }
                 let _ = UnhookWindowsHookEx(hook);
                 CAPTURE.with(|state| state.borrow_mut().take());
                 let _ = ready.try_send(Err(CaptureError::Session));
@@ -136,7 +135,9 @@ impl Keyboard {
                 DispatchMessageW(&message);
             }
             let _ = KillTimer(None, timer);
-            let _ = UnhookWindowsHookEx(mouse);
+            if let Ok(mouse) = mouse {
+                let _ = UnhookWindowsHookEx(mouse);
+            }
             let _ = UnhookWindowsHookEx(hook);
             CAPTURE.with(|state| state.borrow_mut().take());
         });
