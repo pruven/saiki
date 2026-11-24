@@ -35,6 +35,8 @@ pub struct Controls {
     error: Option<CaptureError>,
     overlay: Option<WindowHandle<Overlay>>,
     position: Position,
+    position_profiles: Vec<Position>,
+    profile_draft: Option<Position>,
     fade_delay: FadeDelay,
     super_key_style: SuperKeyStyle,
     update: UpdateStatus,
@@ -75,6 +77,8 @@ impl Controls {
             error: (!layer_shell).then_some(CaptureError::Overlay),
             overlay: None,
             position: Position::load(),
+            position_profiles: Position::load_profiles(),
+            profile_draft: None,
             fade_delay: FadeDelay::load(),
             super_key_style: SuperKeyStyle::load(),
             update: UpdateStatus::Idle,
@@ -288,17 +292,23 @@ impl Controls {
     }
 
     fn toggle_position_picker(&mut self, cx: &mut Context<Self>) {
+        self.profile_draft = None;
         self.pending_position = if self.pending_position.is_some() {
             None
         } else {
             self.help = false;
-            Some(self.position)
+            Some(if Position::ALL.contains(&self.position) {
+                self.position
+            } else {
+                Position::default()
+            })
         };
         cx.notify();
     }
 
     fn pick_position(&mut self, position: Position, cx: &mut Context<Self>) {
         self.pending_position = None;
+        self.profile_draft = None;
         if self.position != position {
             self.position = position;
             if position.save().is_err() {
@@ -430,6 +440,12 @@ impl Controls {
     }
 
     fn position_picker(&self, cx: &mut Context<Self>) -> Div {
+        let label = self
+            .position_profiles
+            .iter()
+            .position(|position| *position == self.position)
+            .map(|index| self.profile_label(index))
+            .unwrap_or_else(|| self.text(self.position.label()));
         div()
             .flex()
             .flex_col()
@@ -442,35 +458,171 @@ impl Controls {
                     .gap(px(8.))
                     .text_size(px(13.))
                     .child(self.text("Overlay position"))
-                    .child(
-                        button("position", self.text(self.position.label()), false).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.toggle_position_picker(cx)
-                            }),
-                        ),
-                    ),
+                    .child(button("position", label, false).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_position_picker(cx)),
+                    )),
             )
             .when_some(self.pending_position, |element, selected| {
-                element.children(Position::ALL.chunks(3).map(|row| {
-                    div()
-                        .flex()
-                        .gap(px(5.))
-                        .children(row.iter().map(|&position| {
+                element
+                    .children(Position::ALL.chunks(3).map(|row| {
+                        div()
+                            .flex()
+                            .gap(px(5.))
+                            .children(row.iter().map(|&position| {
+                                button(
+                                    position.label(),
+                                    self.text(position.label()),
+                                    selected == position,
+                                )
+                                .flex_1()
+                                .justify_center()
+                                .px(px(5.))
+                                .on_click(cx.listener(
+                                    move |this, _: &ClickEvent, _, cx| {
+                                        this.pick_position(position, cx);
+                                    },
+                                ))
+                            }))
+                    }))
+                    .child(self.profile_picker(cx))
+            })
+    }
+
+    fn profile_label(&self, index: usize) -> String {
+        format!("{} {}", self.text("Profile"), index + 1)
+    }
+
+    fn save_position_profiles(
+        &mut self,
+        profiles: Vec<Position>,
+        position: Position,
+        cx: &mut Context<Self>,
+    ) {
+        if Position::save_profiles(&profiles).is_ok() {
+            self.position_profiles = profiles;
+            if self.error == Some(CaptureError::Position) {
+                self.error = None;
+            }
+            self.pick_position(position, cx);
+        } else {
+            self.error = Some(CaptureError::Position);
+            cx.notify();
+        }
+    }
+
+    fn profile_picker(&self, cx: &mut Context<Self>) -> Div {
+        let bounds = std::rc::Rc::new(std::cell::Cell::new(Bounds::default()));
+        let map_bounds = bounds.clone();
+        let marker = match self.profile_draft.unwrap_or(self.position) {
+            Position::Custom { x, y } => Some((x, y)),
+            _ => None,
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .text_size(px(13.))
+            .child(self.text("Click the map to place the overlay"))
+            .child(
+                div()
+                    .id("position-map")
+                    .relative()
+                    .h(px(90.))
+                    .rounded(px(4.))
+                    .bg(rgba(0xffffff17))
+                    .cursor_pointer()
+                    .child(
+                        gpui::canvas(move |bounds, _, _| map_bounds.set(bounds), |_, _, _, _| {})
+                            .size_full(),
+                    )
+                    .when_some(marker, |map, (x, y)| {
+                        map.child(
+                            div()
+                                .absolute()
+                                .left(gpui::relative(f32::from(x) / 1000.))
+                                .top(gpui::relative(f32::from(y) / 1000.))
+                                .ml(px(-4.))
+                                .mt(px(-4.))
+                                .size(px(8.))
+                                .rounded_full()
+                                .bg(rgb(TEXT)),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        let bounds: Bounds<gpui::Pixels> = bounds.get();
+                        let offset = event.position() - bounds.origin;
+                        let coordinate = |offset: gpui::Pixels, length: gpui::Pixels| {
+                            (1000. * (offset / length).clamp(0., 1.)).round() as u16
+                        };
+                        this.profile_draft = Some(Position::Custom {
+                            x: coordinate(offset.x, bounds.size.width),
+                            y: coordinate(offset.y, bounds.size.height),
+                        });
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div().flex().flex_wrap().gap(px(5.)).children(
+                    self.position_profiles
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &position)| {
                             button(
-                                position.label(),
-                                self.text(position.label()),
-                                selected == position,
+                                ("position-profile", index),
+                                self.profile_label(index),
+                                self.position == position,
                             )
-                            .flex_1()
-                            .justify_center()
-                            .px(px(5.))
                             .on_click(cx.listener(
                                 move |this, _: &ClickEvent, _, cx| {
                                     this.pick_position(position, cx);
                                 },
                             ))
-                        }))
-                }))
+                        }),
+                ),
+            )
+            .when_some(self.profile_draft, |picker, position| {
+                picker.child(
+                    button("save-profile", self.text("Save profile"), true).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            let mut profiles = this.position_profiles.clone();
+                            if !profiles.contains(&position) {
+                                profiles.push(position);
+                            }
+                            this.save_position_profiles(profiles, position, cx);
+                        },
+                    )),
+                )
+            })
+            .when_some(
+                self.profile_draft
+                    .filter(|draft| !self.position_profiles.contains(draft)),
+                |picker, position| {
+                    let active = self
+                        .position_profiles
+                        .iter()
+                        .position(|entry| *entry == self.position);
+                    picker.when_some(active, |picker, index| {
+                        picker.child(
+                            button("update-profile", self.text("Update active profile"), false)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    let mut profiles = this.position_profiles.clone();
+                                    profiles[index] = position;
+                                    this.save_position_profiles(profiles, position, cx);
+                                })),
+                        )
+                    })
+                },
+            )
+            .when(self.position_profiles.contains(&self.position), |picker| {
+                picker.child(
+                    button("delete-profile", self.text("Delete active profile"), false).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            let mut profiles = this.position_profiles.clone();
+                            profiles.retain(|position| *position != this.position);
+                            this.save_position_profiles(profiles, Position::default(), cx);
+                        }),
+                    ),
+                )
             })
     }
 }
@@ -712,7 +864,7 @@ fn keyboard_mark() -> Div {
         )
 }
 
-fn button(id: &'static str, text: String, primary: bool) -> gpui::Stateful<Div> {
+fn button(id: impl Into<gpui::ElementId>, text: String, primary: bool) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .cursor_pointer()

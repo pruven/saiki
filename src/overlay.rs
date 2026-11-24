@@ -300,6 +300,27 @@ fn open(
     super_key_style: SuperKeyStyle,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
+    #[cfg(target_os = "linux")]
+    let display = match position {
+        Position::Custom { .. } => cx.primary_display().or_else(|| {
+            // Wayland does not report a primary monitor.
+            cx.displays().into_iter().min_by_key(|display| {
+                let origin = display.bounds().origin;
+                (origin.x, origin.y, u64::from(display.id()))
+            })
+        }),
+        _ => None,
+    };
+    #[cfg(target_os = "linux")]
+    let margin = match (position, &display) {
+        (Position::Custom { x, y }, Some(display)) => {
+            let screen = display.bounds().size;
+            let left = placement_offset(f32::from(screen.width) - SURFACE_WIDTH, x);
+            let top = placement_offset(f32::from(screen.height) - SURFACE_HEIGHT, y);
+            Some((px(top), px(0.), px(0.), px(left)))
+        }
+        _ => None,
+    };
     let handle = cx.open_window(
         WindowOptions {
             titlebar: None,
@@ -317,9 +338,13 @@ fn open(
                 namespace: "saiki".into(),
                 layer: Layer::Overlay,
                 anchor: position.anchor(),
+                margin,
+                exclusive_zone: margin.map(|_| px(-1.)),
                 keyboard_interactivity: KeyboardInteractivity::None,
                 ..Default::default()
             }),
+            #[cfg(target_os = "linux")]
+            display_id: display.map(|display| display.id()),
             focus: false,
             app_id: Some("saiki".into()),
             window_background: WindowBackgroundAppearance::Transparent,
@@ -432,6 +457,10 @@ fn windows_key_icon() -> Div {
         }))
 }
 
+fn placement_offset(remaining: f32, position: u16) -> f32 {
+    (remaining.max(0.) * f32::from(position) / 1000.).round()
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_overlay_bounds(
     position: Position,
@@ -440,6 +469,13 @@ fn windows_overlay_bounds(
 ) -> Bounds<gpui::DevicePixels> {
     let surface = size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)).to_device_pixels(scale);
     let remaining = work_area.size - surface;
+    if let Position::Custom { x, y } = position {
+        let offset = point(
+            gpui::DevicePixels(placement_offset(remaining.width.0 as f32, x) as i32),
+            gpui::DevicePixels(placement_offset(remaining.height.0 as f32, y) as i32),
+        );
+        return Bounds::new(work_area.origin + offset, surface);
+    }
     let x = match position.horizontal() {
         -1 => work_area.origin.x,
         1 => work_area.origin.x + remaining.width,
@@ -575,6 +611,7 @@ mod tests {
             (Position::BottomLeft, 64, 612),
             (Position::BottomCenter, 690, 612),
             (Position::BottomRight, 1317, 612),
+            (Position::Custom { x: 250, y: 750 }, 377, 467),
         ] {
             let bounds = windows_overlay_bounds(position, work_area, 1.5);
             assert_eq!(

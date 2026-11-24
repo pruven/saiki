@@ -68,7 +68,7 @@ Enable the shortcuts-only option to hide ordinary typing. Pausing clears the car
 
 Letters appear together as you type. Space finishes a word, Backspace edits the current word, and shortcuts get their own cards.
 
-Use **Overlay position** to pick a corner or the center of the top or bottom edge. Use **Fade delay** to choose how long cards stay visible after the last key, from 0.5 to 10 seconds. The default is 2.6 seconds. Saiki remembers both settings between launches.
+Open **Overlay position** to choose a preset or click the screen map and select **Save profile**. Select a saved profile to switch to it. To move it, choose a new point on the map and select **Update active profile**. Use **Fade delay** to choose how long cards stay visible after the last key, from 0.5 to 10 seconds. The default is 2.6 seconds. Saiki remembers both settings between launches.
 
 Use **Super key display** to choose **Super** or **Windows icon** on either platform. The setting applies to standalone presses and shortcuts and is remembered between launches. Linux defaults to **Super** and Windows defaults to **Windows icon**.
 
