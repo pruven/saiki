@@ -60,6 +60,8 @@ Click **Start capture**, then close the controls or switch apps. Saiki stays in 
 
 Enable the shortcuts-only option to hide ordinary typing. Pausing clears the cards. To include the overlay in a recording, capture an entire monitor.
 
+Enable **Gamer Mode** to show each key press as its own card in a vertical stack, including Ctrl, Alt, Shift, Space, and Backspace. The stack also shows left, right, middle, and two side mouse buttons. Held inputs stay highlighted in place. Released inputs dim and fade using the overlay fade delay. The stack holds up to four keycaps and gives held keys priority. Switching between Gamer Mode and shortcuts-only clears the overlay.
+
 Letters appear together as you type. Space finishes a word, Backspace edits the current word, and shortcuts get their own cards.
 
 Open **Overlay position** and select **Drag overlay**. Drag the sample card to the desired spot, then select **Save profile**. You can also choose a preset or use the screen map. Select a saved profile to switch to it. To move it, choose a new point on the map and select **Update active profile**. Use **Fade delay** to choose how long cards stay visible after the last key, from 0.5 to 10 seconds. The default is 2.6 seconds. Saiki remembers both settings between launches.

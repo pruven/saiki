@@ -1,3 +1,7 @@
+use std::sync::{Arc, atomic::AtomicBool};
+
+pub type GamerMode = Arc<AtomicBool>;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "windows")]
@@ -49,10 +53,32 @@ pub enum Stroke {
     Text(char),
     Space,
     Backspace,
+    GamePress { code: u32, label: String },
+    GameRelease { code: u32 },
     Key { caps: Vec<String>, shortcut: bool },
 }
 
 impl Stroke {
+    pub fn mouse_button(button: u32, pressed: bool) -> Option<Self> {
+        let label = match button {
+            1 => "LMB",
+            2 => "RMB",
+            3 => "MMB",
+            4 => "Mouse 4",
+            5 => "Mouse 5",
+            _ => return None,
+        };
+        let code = 0x8000_0000 | button;
+        Some(if pressed {
+            Self::GamePress {
+                code,
+                label: label.into(),
+            }
+        } else {
+            Self::GameRelease { code }
+        })
+    }
+
     pub fn is_shortcut(&self) -> bool {
         matches!(self, Self::Key { shortcut: true, .. })
     }

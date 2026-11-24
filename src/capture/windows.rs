@@ -1,9 +1,9 @@
-use super::{CaptureError, SUPER_KEY, Stroke};
+use super::{CaptureError, GamerMode, SUPER_KEY, Stroke};
 use async_channel::{Receiver, Sender};
 use std::{
     cell::RefCell,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
     thread,
 };
 use windows::Win32::{
@@ -23,6 +23,7 @@ thread_local! {
 struct HookState {
     sender: Sender<Result<Vec<Stroke>, CaptureError>>,
     keys: [u8; 256],
+    gamer_mode: GamerMode,
 }
 
 pub struct Keyboard {
@@ -46,7 +47,7 @@ impl Drop for WorkerQueue {
 }
 
 impl Keyboard {
-    pub async fn open() -> Result<Self, CaptureError> {
+    pub async fn open(gamer_mode: GamerMode) -> Result<Self, CaptureError> {
         let (sender, receiver) = async_channel::bounded(64);
         let (ready, started) = async_channel::bounded(1);
         let worker = Arc::new(Mutex::new(Worker::default()));
@@ -78,7 +79,13 @@ impl Keyboard {
             for key in [VK_CAPITAL, VK_NUMLOCK, VK_SCROLL] {
                 keys[key.0 as usize] |= (GetKeyState(key.0 as i32) & 1) as u8;
             }
-            CAPTURE.with(|state| *state.borrow_mut() = Some(HookState { sender, keys }));
+            CAPTURE.with(|state| {
+                *state.borrow_mut() = Some(HookState {
+                    sender,
+                    keys,
+                    gamer_mode,
+                })
+            });
             let hook = SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(keyboard_hook),
@@ -90,9 +97,22 @@ impl Keyboard {
                 CAPTURE.with(|state| state.borrow_mut().take());
                 return;
             };
+            let mouse = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                Some(mouse_hook),
+                Some(GetModuleHandleW(None).unwrap_or_default().into()),
+                0,
+            );
+            let Ok(mouse) = mouse else {
+                let _ = UnhookWindowsHookEx(hook);
+                CAPTURE.with(|state| state.borrow_mut().take());
+                let _ = ready.try_send(Err(CaptureError::Device));
+                return;
+            };
             // A timer also pauses capture when the session locks without a key event.
             let timer = SetTimer(None, 1, 100, None);
             if timer == 0 {
+                let _ = UnhookWindowsHookEx(mouse);
                 let _ = UnhookWindowsHookEx(hook);
                 CAPTURE.with(|state| state.borrow_mut().take());
                 let _ = ready.try_send(Err(CaptureError::Session));
@@ -116,6 +136,7 @@ impl Keyboard {
                 DispatchMessageW(&message);
             }
             let _ = KillTimer(None, timer);
+            let _ = UnhookWindowsHookEx(mouse);
             let _ = UnhookWindowsHookEx(hook);
             CAPTURE.with(|state| state.borrow_mut().take());
         });
@@ -201,20 +222,45 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     if code >= 0 {
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let pressed = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-        CAPTURE.with(|state| {
-            if let Some(state) = state.borrow_mut().as_mut()
-                && let Some(strokes) = state.update(event, pressed)
-                && state.sender.try_send(Ok(strokes)).is_err()
-            {
-                // Overflow stops capture rather than retaining an unbounded backlog.
-                let _ = state.sender.force_send(Err(CaptureError::Device));
-                unsafe {
-                    PostQuitMessage(0);
-                }
+        queue_strokes(|state| state.update(event, pressed));
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        queue_strokes(|state| {
+            if !state.gamer_mode.load(Ordering::Relaxed) {
+                return None;
             }
+            let message = wparam.0 as u32;
+            let (button, pressed) = match message {
+                WM_LBUTTONDOWN | WM_LBUTTONUP => (1, message == WM_LBUTTONDOWN),
+                WM_RBUTTONDOWN | WM_RBUTTONUP => (2, message == WM_RBUTTONDOWN),
+                WM_MBUTTONDOWN | WM_MBUTTONUP => (3, message == WM_MBUTTONDOWN),
+                WM_XBUTTONDOWN | WM_XBUTTONUP => {
+                    let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+                    (3 + (event.mouseData >> 16), message == WM_XBUTTONDOWN)
+                }
+                _ => return None,
+            };
+            Stroke::mouse_button(button, pressed).map(|stroke| vec![stroke])
         });
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+fn queue_strokes(strokes: impl FnOnce(&mut HookState) -> Option<Vec<Stroke>>) {
+    CAPTURE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut()
+            && let Some(strokes) = strokes(state)
+            && state.sender.try_send(Ok(strokes)).is_err()
+        {
+            // Overflow stops capture rather than retaining an unbounded backlog.
+            let _ = state.sender.force_send(Err(CaptureError::Device));
+            unsafe { PostQuitMessage(0) };
+        }
+    });
 }
 
 impl HookState {
@@ -231,7 +277,15 @@ impl HookState {
         for (generic, left, right) in [(0x10, 0xa0, 0xa1), (0x11, 0xa2, 0xa3), (0x12, 0xa4, 0xa5)] {
             self.keys[generic] = self.keys[left] | self.keys[right];
         }
-        if !pressed || matches!(key, 0x10..=0x12 | 0xa0..=0xa5) {
+        let gamer_mode = self.gamer_mode.load(Ordering::Relaxed);
+        if !pressed {
+            return (gamer_mode && was_down)
+                .then(|| vec![Stroke::GameRelease { code: event.vkCode }]);
+        }
+        if gamer_mode && was_down {
+            return None;
+        }
+        if !gamer_mode && matches!(key, 0x10..=0x12 | 0xa0..=0xa5) {
             return None;
         }
         let down = |key| self.keys[key] & 0x80 != 0;
@@ -239,7 +293,7 @@ impl HookState {
         let ctrl = down(0x11) && !alt_gr;
         let alt = down(0x12) && !alt_gr;
         let ctrl_alt = [(ctrl, "Ctrl"), (alt, "Alt")];
-        if matches!(VIRTUAL_KEY(key as u16), VK_LWIN | VK_RWIN) {
+        if !gamer_mode && matches!(VIRTUAL_KEY(key as u16), VK_LWIN | VK_RWIN) {
             return (!was_down).then(|| {
                 vec![Stroke::Key {
                     caps: ctrl_alt
@@ -255,7 +309,7 @@ impl HookState {
         let win = down(VK_LWIN.0 as usize) || down(VK_RWIN.0 as usize);
         let shift = down(0x10);
         let shortcut = ctrl || alt || win;
-        if !shortcut {
+        if !gamer_mode && !shortcut {
             if key == 0x20 {
                 return Some(vec![Stroke::Space]);
             }
@@ -264,7 +318,9 @@ impl HookState {
             }
         }
         let mut keys = self.keys;
-        if shortcut {
+        if gamer_mode {
+            keys = [0; 256];
+        } else if shortcut {
             // Ctrl would otherwise turn letters into control characters.
             for key in [0x11, 0xa2, 0xa3, 0x12, 0xa4, 0xa5] {
                 keys[key] = 0;
@@ -288,6 +344,17 @@ impl HookState {
         } else {
             String::new()
         };
+        if gamer_mode {
+            let label = key_label(key as u32, &translated).unwrap_or_else(|| format!("Key {key}"));
+            return Some(vec![Stroke::GamePress {
+                code: event.vkCode,
+                label: if label.chars().count() == 1 {
+                    label.to_uppercase()
+                } else {
+                    label
+                },
+            }]);
+        }
         if !shortcut && !translated.is_empty() && translated.chars().all(|c| !c.is_control()) {
             return Some(translated.chars().map(Stroke::Text).collect());
         }
@@ -313,6 +380,10 @@ impl HookState {
 
 fn key_label(key: u32, translated: &str) -> Option<String> {
     let named = match key {
+        0x10 | 0xa0 | 0xa1 => "Shift",
+        0x11 | 0xa2 | 0xa3 => "Ctrl",
+        0x12 | 0xa4 | 0xa5 => "Alt",
+        0x5b | 0x5c => SUPER_KEY,
         0x08 => "Backspace",
         0x09 => "Tab",
         0x0d => "Enter",
@@ -367,12 +438,50 @@ mod tests {
     }
 
     #[test]
+    fn gamer_mode_displays_keys_individually_and_ignores_auto_repeat() {
+        let (sender, _) = async_channel::bounded(1);
+        let mut state = HookState {
+            sender,
+            keys: [0; 256],
+            gamer_mode: Arc::new(true.into()),
+        };
+        for (key, label) in [
+            (0xa2, "Ctrl"),
+            (0xa4, "Alt"),
+            (0xa0, "Shift"),
+            (0x20, "Space"),
+            (0x08, "Backspace"),
+        ] {
+            assert_eq!(
+                update(&mut state, key, true),
+                Some(vec![Stroke::GamePress {
+                    code: key,
+                    label: label.into()
+                }])
+            );
+        }
+        assert!(update(&mut state, 0x20, true).is_none());
+        assert_eq!(
+            update(&mut state, 0x20, false),
+            Some(vec![Stroke::GameRelease { code: 0x20 }])
+        );
+        assert_eq!(
+            update(&mut state, 0x20, true),
+            Some(vec![Stroke::GamePress {
+                code: 0x20,
+                label: "Space".into()
+            }])
+        );
+    }
+
+    #[test]
     fn shows_either_windows_key_on_press_and_in_shortcuts() {
         for key in [VK_LWIN, VK_RWIN] {
             let (sender, _) = async_channel::bounded(1);
             let mut state = HookState {
                 sender,
                 keys: [0; 256],
+                gamer_mode: GamerMode::default(),
             };
             let key = u32::from(key.0);
             let standalone = Some(vec![Stroke::Key {
@@ -409,6 +518,7 @@ mod tests {
             let mut state = HookState {
                 sender,
                 keys: [0; 256],
+                gamer_mode: GamerMode::default(),
             };
             for key in modifiers {
                 assert!(update(&mut state, u32::from(key.0), true).is_none());
@@ -429,6 +539,7 @@ mod tests {
         let mut state = HookState {
             sender,
             keys: [0; 256],
+            gamer_mode: GamerMode::default(),
         };
         assert!(update(&mut state, 0xa2, true).is_none());
         assert!(update(&mut state, 0xa0, true).is_none());

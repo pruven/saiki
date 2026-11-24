@@ -1,8 +1,9 @@
-use super::{CaptureError, SUPER_KEY, Stroke};
+use super::{CaptureError, GamerMode, SUPER_KEY, Stroke};
 use anyhow::Result;
 use async_io::Async;
 use futures_lite::{StreamExt, future};
 use input::event::keyboard::{KeyState, KeyboardEvent, KeyboardEventTrait};
+use input::event::pointer::{ButtonState, PointerEvent};
 use input::{DeviceCapability, Event, Libinput, LibinputInterface};
 use serde_json::Value;
 use std::env;
@@ -11,6 +12,7 @@ use std::future::Future;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use xkbcommon::xkb::{self, keysyms::*};
 use zbus::zvariant::OwnedObjectPath;
@@ -38,10 +40,11 @@ pub struct Keyboard {
     input: Libinput,
     ready: Async<OwnedFd>,
     labels: KeyLabels,
+    gamer_mode: GamerMode,
 }
 
 impl Keyboard {
-    pub async fn open() -> Result<Self, CaptureError> {
+    pub async fn open(gamer_mode: GamerMode) -> Result<Self, CaptureError> {
         let keyboard = hyprland_keyboard().await.unwrap_or_default();
         let labels = KeyLabels::new(
             keyboard["layout"].as_str().unwrap_or_default(),
@@ -80,6 +83,7 @@ impl Keyboard {
             input,
             ready,
             labels,
+            gamer_mode,
         })
     }
 
@@ -93,15 +97,27 @@ impl Keyboard {
             .input
             .by_ref()
             .filter_map(|event| {
-                let Event::Keyboard(KeyboardEvent::Key(key)) = event else {
-                    return None;
-                };
-                let pressed = key.key_state() == KeyState::Pressed;
-                // Multiple keyboards may hold the same key. Feed the first press and last release.
-                if key.seat_key_count() != u32::from(pressed) {
-                    return None;
+                let gamer_mode = self.gamer_mode.load(Ordering::Relaxed);
+                match event {
+                    Event::Keyboard(KeyboardEvent::Key(key)) => {
+                        let pressed = key.key_state() == KeyState::Pressed;
+                        // Multiple devices may hold the same input.
+                        if key.seat_key_count() != u32::from(pressed) {
+                            return None;
+                        }
+                        self.labels.update(key.key(), pressed, gamer_mode)
+                    }
+                    Event::Pointer(PointerEvent::Button(button)) if gamer_mode => {
+                        let pressed = button.button_state() == ButtonState::Pressed;
+                        if button.seat_button_count() != u32::from(pressed) {
+                            return None;
+                        }
+                        // Linux BTN_LEFT through BTN_EXTRA.
+                        let number = button.button().checked_sub(0x10f)?;
+                        Stroke::mouse_button(number, pressed)
+                    }
+                    _ => None,
                 }
-                self.labels.update(key.key(), pressed)
             })
             .collect())
     }
@@ -156,10 +172,20 @@ impl KeyLabels {
         non_upper_case_globals,
         reason = "XKB keysyms use their upstream names"
     )]
-    fn update(&mut self, code: u32, pressed: bool) -> Option<Stroke> {
+    fn update(&mut self, code: u32, pressed: bool, gamer_mode: bool) -> Option<Stroke> {
         // XKB numbers evdev keys with an offset of eight.
         let key = xkb::Keycode::new(code + 8);
-        let symbol = self.0.key_get_one_sym(key);
+        let symbol = if gamer_mode {
+            let layout = self.0.key_get_layout(key);
+            self.0
+                .get_keymap()
+                .key_get_syms_by_level(key, layout, 0)
+                .first()
+                .copied()
+                .unwrap_or(xkb::Keysym::NoSymbol)
+        } else {
+            self.0.key_get_one_sym(key)
+        };
         let direction = if pressed {
             xkb::KeyDirection::Down
         } else {
@@ -167,12 +193,21 @@ impl KeyLabels {
         };
         let changed = self.0.update_key(key, direction);
         let mods_changed = changed & (xkb::STATE_MODS_DEPRESSED | xkb::STATE_MODS_LATCHED) != 0;
-        if !pressed || symbol == xkb::Keysym::NoSymbol {
+        if !pressed {
+            return gamer_mode.then_some(Stroke::GameRelease { code });
+        }
+        if symbol == xkb::Keysym::NoSymbol {
+            if gamer_mode {
+                return Some(Stroke::GamePress {
+                    code,
+                    label: format!("Key {code}"),
+                });
+            }
             return None;
         }
         let is_active = |name: &str| self.0.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
         let ctrl_alt = [(xkb::MOD_NAME_CTRL, "Ctrl"), (xkb::MOD_NAME_ALT, "Alt")];
-        if matches!(symbol.raw(), KEY_Super_L | KEY_Super_R) {
+        if !gamer_mode && matches!(symbol.raw(), KEY_Super_L | KEY_Super_R) {
             return Some(Stroke::Key {
                 caps: ctrl_alt
                     .into_iter()
@@ -183,31 +218,33 @@ impl KeyLabels {
                 shortcut: true,
             });
         }
-        if mods_changed && !matches!(symbol.raw(), KEY_Caps_Lock | KEY_Num_Lock) {
+        if !gamer_mode && mods_changed && !matches!(symbol.raw(), KEY_Caps_Lock | KEY_Num_Lock) {
             return None;
         }
-        if matches!(
-            symbol.raw(),
-            KEY_Control_L
-                | KEY_Control_R
-                | KEY_Alt_L
-                | KEY_Alt_R
-                | KEY_Meta_L
-                | KEY_Meta_R
-                | KEY_Hyper_L
-                | KEY_Hyper_R
-                | KEY_Shift_L
-                | KEY_Shift_R
-                | KEY_ISO_Level3_Shift
-                | KEY_ISO_Level5_Shift
-        ) {
+        if !gamer_mode
+            && matches!(
+                symbol.raw(),
+                KEY_Control_L
+                    | KEY_Control_R
+                    | KEY_Alt_L
+                    | KEY_Alt_R
+                    | KEY_Meta_L
+                    | KEY_Meta_R
+                    | KEY_Hyper_L
+                    | KEY_Hyper_R
+                    | KEY_Shift_L
+                    | KEY_Shift_R
+                    | KEY_ISO_Level3_Shift
+                    | KEY_ISO_Level5_Shift
+            )
+        {
             return None;
         }
 
         let shortcut = [xkb::MOD_NAME_CTRL, xkb::MOD_NAME_ALT, xkb::MOD_NAME_LOGO]
             .into_iter()
             .any(is_active);
-        if !shortcut {
+        if !gamer_mode && !shortcut {
             match symbol.raw() {
                 KEY_space => return Some(Stroke::Space),
                 KEY_BackSpace => return Some(Stroke::Backspace),
@@ -220,18 +257,12 @@ impl KeyLabels {
                 return Some(Stroke::Text(character));
             }
         }
-        let caps: Vec<String> = ctrl_alt
-            .into_iter()
-            .chain([
-                (xkb::MOD_NAME_LOGO, SUPER_KEY),
-                ("LevelThree", "AltGr"),
-                (xkb::MOD_NAME_SHIFT, "Shift"),
-            ])
-            .filter(|(name, _)| is_active(name))
-            .map(|(_, label)| label.into())
-            .collect();
-
         let named = match symbol.raw() {
+            KEY_Control_L | KEY_Control_R => "Ctrl",
+            KEY_Alt_L | KEY_Alt_R => "Alt",
+            KEY_Shift_L | KEY_Shift_R => "Shift",
+            KEY_Super_L | KEY_Super_R => SUPER_KEY,
+            KEY_ISO_Level3_Shift => "AltGr",
             KEY_BackSpace => "Backspace",
             KEY_Return => "Enter",
             KEY_KP_Enter => "Num Enter",
@@ -263,7 +294,7 @@ impl KeyLabels {
         let label = if !named.is_empty() {
             named.into()
         } else if let Some(ch) = symbol.key_char().filter(|ch| !ch.is_control()) {
-            if shortcut && !is_active("LevelThree") {
+            if (shortcut || gamer_mode) && !is_active("LevelThree") {
                 ch.to_uppercase().collect()
             } else {
                 ch.to_string()
@@ -275,10 +306,30 @@ impl KeyLabels {
                 .take(24)
                 .collect()
         };
+        if gamer_mode {
+            return Some(Stroke::GamePress {
+                code,
+                label: if label.is_empty() {
+                    format!("Key {code}")
+                } else {
+                    label
+                },
+            });
+        }
         if label.is_empty() {
             return None;
         }
-        let mut caps = caps;
+        let mut caps: Vec<String> = ctrl_alt
+            .into_iter()
+            .chain([
+                (xkb::MOD_NAME_LOGO, SUPER_KEY),
+                ("LevelThree", "AltGr"),
+                (xkb::MOD_NAME_SHIFT, "Shift"),
+            ])
+            .filter(|(name, _)| is_active(name))
+            .map(|(_, label)| label.into())
+            .collect();
+
         caps.push(label);
         Some(Stroke::Key { caps, shortcut })
     }
@@ -356,14 +407,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gamer_mode_displays_keys_individually_while_modifiers_are_held() {
+        let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
+        for (code, label) in [
+            (29, "Ctrl"),
+            (56, "Alt"),
+            (42, "Shift"),
+            (57, "Space"),
+            (30, "A"),
+            (14, "Backspace"),
+        ] {
+            assert_eq!(
+                labels.update(code, true, true),
+                Some(Stroke::GamePress {
+                    code,
+                    label: label.into()
+                })
+            );
+        }
+        assert_eq!(
+            labels.update(57, false, true),
+            Some(Stroke::GameRelease { code: 57 })
+        );
+        assert_eq!(
+            labels.update(57, true, true),
+            Some(Stroke::GamePress {
+                code: 57,
+                label: "Space".into()
+            })
+        );
+    }
+
+    #[test]
     fn distinguishes_typing_and_shortcuts() {
         let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
-        assert_eq!(labels.update(30, true), Some(Stroke::Text('a')));
-        assert!(labels.update(30, false).is_none());
-        assert!(labels.update(29, true).is_none());
-        assert!(labels.update(42, true).is_none());
+        assert_eq!(labels.update(30, true, false), Some(Stroke::Text('a')));
+        assert!(labels.update(30, false, false).is_none());
+        assert!(labels.update(29, true, false).is_none());
+        assert!(labels.update(42, true, false).is_none());
         assert_eq!(
-            labels.update(46, true),
+            labels.update(46, true, false),
             Some(Stroke::Key {
                 caps: vec!["Ctrl".into(), "Shift".into(), "C".into()],
                 shortcut: true,
@@ -376,22 +459,22 @@ mod tests {
         for code in [125, 126] {
             let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
             assert_eq!(
-                labels.update(code, true),
+                labels.update(code, true, false),
                 Some(Stroke::Key {
                     caps: vec![SUPER_KEY.into()],
                     shortcut: true
                 })
             );
             assert_eq!(
-                labels.update(KEY_SPACE, true),
+                labels.update(KEY_SPACE, true, false),
                 Some(Stroke::Key {
                     caps: vec![SUPER_KEY.into(), "Space".into()],
                     shortcut: true,
                 })
             );
-            assert!(labels.update(code, false).is_none());
-            labels.update(KEY_SPACE, false);
-            assert_eq!(labels.update(KEY_SPACE, true), Some(Stroke::Space));
+            assert!(labels.update(code, false, false).is_none());
+            labels.update(KEY_SPACE, false, false);
+            assert_eq!(labels.update(KEY_SPACE, true, false), Some(Stroke::Space));
         }
     }
 
@@ -404,10 +487,10 @@ mod tests {
         ] {
             let mut labels = KeyLabels::new("us", "", Some(String::new()), "").unwrap();
             for &code in modifiers {
-                assert!(labels.update(code, true).is_none());
+                assert!(labels.update(code, true, false).is_none());
             }
             assert_eq!(
-                labels.update(125, true),
+                labels.update(125, true, false),
                 Some(Stroke::Key {
                     caps: caps.into_iter().map(str::to_owned).collect(),
                     shortcut: true,
@@ -419,17 +502,19 @@ mod tests {
     #[test]
     fn maps_active_layout_and_alt_gr() {
         let mut labels = KeyLabels::new("us,de", "", Some(String::new()), "German").unwrap();
-        assert_eq!(labels.update(21, true), Some(Stroke::Text('z')));
-        labels.update(21, false);
-        assert!(labels.update(100, true).is_none());
-        assert_eq!(labels.update(16, true), Some(Stroke::Text('@')));
+        assert_eq!(labels.update(21, true, false), Some(Stroke::Text('z')));
+        labels.update(21, false, false);
+        assert!(labels.update(100, true, false).is_none());
+        assert_eq!(labels.update(16, true, false), Some(Stroke::Text('@')));
     }
 
     #[test]
     fn opens_desktop_keyboard_when_requested() {
         if env::var_os("SAIKI_TEST_DEVICES").is_some() {
             future::block_on(async {
-                let opened = while_unlocked(async { Keyboard::open().await.map(drop) }).await;
+                let opened =
+                    while_unlocked(async { Keyboard::open(GamerMode::default()).await.map(drop) })
+                        .await;
                 assert_eq!(opened, Ok(()));
             });
         }
