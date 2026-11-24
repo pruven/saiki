@@ -856,15 +856,19 @@ fn configure_windows_overlay(window: &Window, position: Option<Position>) -> any
                 bounds.origin.y.0,
                 bounds.size.width.0,
                 bounds.size.height.0,
-                SWP_NOACTIVATE | flags,
+                flags,
             )
         };
         // GPUI handles a DPI transition by applying Windows' suggested rectangle.
         // Let that happen while hidden, then apply the intended bounds again.
         if GetDpiForWindow(hwnd) != dpi_x {
-            place(SWP_FRAMECHANGED)?;
+            place(SWP_FRAMECHANGED | SWP_NOACTIVATE)?;
         }
-        place(SWP_FRAMECHANGED | SWP_SHOWWINDOW)?;
+        let mut show_flags = SWP_FRAMECHANGED | SWP_SHOWWINDOW;
+        if position.is_some() {
+            show_flags |= SWP_NOACTIVATE;
+        }
+        place(show_flags)?;
     }
     Ok(())
 }
