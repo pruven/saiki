@@ -24,72 +24,15 @@ jobs:
           python3 - <<'PY'
           import os
           from pathlib import Path
-          import re
           import tomllib
 
           cargo_version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
-          pkgbuild_version = re.search(r"^pkgver=(\S+)$", Path("pkgbuild/PKGBUILD").read_text(), re.M)
           lock_version = next(package["version"] for package in tomllib.loads(Path("Cargo.lock").read_text())["package"] if package["name"] == "saiki")
           if lock_version != cargo_version:
               raise SystemExit("Cargo.toml and Cargo.lock versions must match")
-          if not pkgbuild_version or pkgbuild_version[1] != cargo_version:
-              raise SystemExit("Cargo.toml and PKGBUILD versions must match")
           if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{cargo_version}":
               raise SystemExit(f"Expected release tag v{cargo_version}")
           PY
-
-  build:
-    needs: validate
-    name: Arch Linux (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            image: archlinux:base-devel
-            vulkan_driver: vulkan-intel
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Test and build the Arch Linux package
-        env:
-          PACKAGE_ARCH: ${{ matrix.arch }}
-          BUILD_IMAGE: ${{ matrix.image }}
-          VULKAN_DRIVER: ${{ matrix.vulkan_driver }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/saiki-release"
-          docker run --rm \
-            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" \
-            --mount "type=bind,src=$RUNNER_TEMP/saiki-release,dst=/release" \
-            --env PACKAGE_ARCH \
-            --env VULKAN_DRIVER \
-            "$BUILD_IMAGE" bash -euo pipefail -c '
-              test "$(uname -m)" = "$PACKAGE_ARCH"
-              pacman -Syu --noconfirm --needed rust pkgconf wayland "$VULKAN_DRIVER" \
-                libinput libxkbcommon-x11 libxcb fontconfig freetype2 ttf-liberation openssl ca-certificates
-              useradd --create-home builder
-              mkdir /build
-              cp -a /source/. /build/
-              chown -R builder:builder /build
-              cd /build
-              runuser -u builder -- env JOBS=2 ./bin/test
-              cd pkgbuild
-              runuser -u builder -- env JOBS=2 makepkg --noconfirm
-              install -m644 saiki-*-"$PACKAGE_ARCH".pkg.tar.zst /release/
-            '
-          cd "$RUNNER_TEMP/saiki-release"
-          sha256sum saiki-*-"$PACKAGE_ARCH".pkg.tar.zst > "SHA256SUMS-linux-$PACKAGE_ARCH"
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: saiki-arch-${{ matrix.arch }}
-          path: ${{ runner.temp }}/saiki-release/
-          if-no-files-found: error
-          compression-level: 0
 
   linux:
     needs: validate
@@ -210,7 +153,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [build, linux, windows]
+    needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -226,7 +169,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # PowerShell writes CRLF. Normalize the manifest before checking or reading filenames.
-          sed 's/\r$//' SHA256SUMS-linux-x86_64 SHA256SUMS-archive-linux-{x86_64,aarch64} \
+          sed 's/\r$//' SHA256SUMS-archive-linux-{x86_64,aarch64} \
             SHA256SUMS-windows-{x86_64,arm64} > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
           mapfile -t packages < <(cut -d ' ' -f 3 SHA256SUMS)
