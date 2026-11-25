@@ -1,6 +1,6 @@
 use crate::capture::{self, CaptureError, GamerMode, Keyboard};
 use crate::overlay::{self, EDGE, MUTED, Overlay, SURFACE, TEXT};
-use crate::settings::{FadeDelay, Position, SuperKeyStyle};
+use crate::settings::{Appearance, FadeDelay, Position, SuperKeyStyle};
 use crate::updates;
 #[cfg(target_os = "linux")]
 use gpui::MouseButton;
@@ -33,6 +33,8 @@ pub struct Controls {
     shortcuts_only: bool,
     gamer_mode: GamerMode,
     help: bool,
+    show_appearance: bool,
+    appearance: Appearance,
     error: Option<CaptureError>,
     overlay: Option<WindowHandle<Overlay>>,
     placement_editor: Option<WindowHandle<overlay::PlacementEditor>>,
@@ -77,6 +79,8 @@ impl Controls {
             shortcuts_only: false,
             gamer_mode: GamerMode::default(),
             help: false,
+            show_appearance: false,
+            appearance: Appearance::load(),
             error: (!layer_shell).then_some(CaptureError::Overlay),
             overlay: None,
             placement_editor: None,
@@ -253,6 +257,7 @@ impl Controls {
                                 this.position,
                                 this.fade_delay.duration(),
                                 this.super_key_style,
+                                this.appearance,
                                 this.gamer_mode.load(Ordering::Relaxed),
                                 strokes,
                             )
@@ -326,6 +331,7 @@ impl Controls {
                 self.position,
                 self.fade_delay.duration(),
                 self.super_key_style,
+                self.appearance,
                 gamer_mode,
                 strokes,
             )
@@ -459,6 +465,151 @@ impl Controls {
             )
     }
 
+    fn apply_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        if appearance == self.appearance {
+            return;
+        }
+        if appearance.save().is_err() {
+            self.error = Some(CaptureError::Appearance);
+        } else {
+            let resize =
+                overlay::surface_height(self.appearance) != overlay::surface_height(appearance);
+            self.appearance = appearance;
+            if self.error == Some(CaptureError::Appearance) {
+                self.error = None;
+            }
+            if let Some(overlay) = self.overlay {
+                let _ = overlay.update(cx, |view, _, cx| view.set_appearance(appearance, cx));
+            }
+            if resize && overlay::relocate(cx, &mut self.overlay, self.position).is_err() {
+                self.error = Some(CaptureError::Overlay);
+            }
+        }
+        cx.notify();
+    }
+
+    fn appearance_control(&self, cx: &mut Context<Self>) -> Div {
+        let appearance = self.appearance;
+        type Adjust = fn(&mut Appearance) -> &mut u8;
+        let rows: [(_, _, _, _, _, Adjust); 4] = [
+            (
+                "Font size",
+                appearance.font_size,
+                " px",
+                Appearance::FONT_SIZE,
+                1,
+                |a| &mut a.font_size,
+            ),
+            (
+                "Card opacity",
+                appearance.opacity,
+                "%",
+                Appearance::OPACITY,
+                5,
+                |a| &mut a.opacity,
+            ),
+            (
+                "Card spacing",
+                appearance.spacing,
+                " px",
+                Appearance::SPACING,
+                1,
+                |a| &mut a.spacing,
+            ),
+            (
+                "Maximum visible cards",
+                appearance.max_cards,
+                "",
+                1..=Appearance::MAX_CARDS,
+                1,
+                |a| &mut a.max_cards,
+            ),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .items_start()
+            .child(
+                button(
+                    "appearance",
+                    self.text("Appearance settings"),
+                    self.show_appearance,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.show_appearance = !this.show_appearance;
+                    cx.notify();
+                })),
+            )
+            .when(self.show_appearance, |panel| {
+                panel
+                    .children(rows.map(|(label, value, unit, range, step, field)| {
+                        let smaller = value.saturating_sub(step).max(*range.start());
+                        let larger = value.saturating_add(step).min(*range.end());
+                        let adjust = |id, symbol: &str, next| {
+                            button(id, symbol.into(), false)
+                                .when(next == value, |button| button.opacity(0.4))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    let mut appearance = this.appearance;
+                                    *field(&mut appearance) = next;
+                                    this.apply_appearance(appearance, cx);
+                                }))
+                        };
+                        div()
+                            .id(label)
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_size(px(13.))
+                            .child(self.text(label))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .child(adjust("decrease", "−", smaller))
+                                    .child(
+                                        div()
+                                            .min_w(px(52.))
+                                            .text_center()
+                                            .child(format!("{value}{unit}")),
+                                    )
+                                    .child(adjust("increase", "+", larger)),
+                            )
+                    }))
+                    .child(div().text_size(px(13.)).child(self.text("Colors")))
+                    .child(
+                        div().flex().flex_wrap().gap(px(5.)).children(
+                            Appearance::PALETTES
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, label)| {
+                                    let palette = index as u8;
+                                    button(label, self.text(label), appearance.palette == palette)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
+                                                this.apply_appearance(
+                                                    Appearance {
+                                                        palette,
+                                                        ..this.appearance
+                                                    },
+                                                    cx,
+                                                );
+                                            },
+                                        ))
+                                }),
+                        ),
+                    )
+                    .child(
+                        button("reset-appearance", self.text("Reset appearance"), false).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.apply_appearance(Appearance::default(), cx);
+                            }),
+                        ),
+                    )
+            })
+    }
+
     fn super_key_control(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
@@ -570,6 +721,7 @@ impl Controls {
             cx,
             self.position,
             self.super_key_style,
+            self.appearance,
             labels,
             move |position, cx| {
                 controls
@@ -907,6 +1059,7 @@ impl Render for Controls {
                         })),
                 )
             })
+            .child(self.appearance_control(cx))
             .child(self.update_control(cx));
 
         let window = div()
