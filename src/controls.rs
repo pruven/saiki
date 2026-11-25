@@ -314,7 +314,13 @@ impl Controls {
                 )
                 .collect()
         } else {
-            overlay::demo().into_iter().collect()
+            overlay::demo()
+                .into_iter()
+                .filter(|stroke| {
+                    !self.shortcuts_only
+                        || matches!(stroke, capture::Stroke::Key { shortcut: true, .. })
+                })
+                .collect()
         };
         if self.layer_shell
             && overlay::show(
@@ -331,6 +337,12 @@ impl Controls {
             self.error = Some(CaptureError::Overlay);
             cx.notify();
         }
+    }
+
+    fn toggle_help(&mut self, cx: &mut Context<Self>) {
+        self.pending_position = None;
+        self.help = !self.help;
+        cx.notify();
     }
 
     fn toggle_position_picker(&mut self, cx: &mut Context<Self>) {
@@ -730,15 +742,20 @@ impl Render for Controls {
         } else {
             "Capture paused"
         };
-        let detail = if self.help {
-            "Space  Start or pause capture\nP  Choose overlay position\n[ / ]  Adjust fade delay\nQ  Quit\n?  Show keyboard shortcuts"
-        } else if let Some(error) = self.error {
+        let detail = if let Some(error) = self.error {
             error.message()
         } else if self.capturing {
             "Capture continues after you close this window."
         } else {
             "Show keypresses over the other apps on your screen."
         };
+
+        let gamer_mode = self.gamer_mode.load(Ordering::Relaxed);
+        let modes = [
+            ("all-keys", "All keys", !gamer_mode && !self.shortcuts_only),
+            ("shortcuts-only", "Shortcuts only", self.shortcuts_only),
+            ("gamer-mode", "Gamer Mode", gamer_mode),
+        ];
 
         #[cfg(target_os = "linux")]
         let chrome = div()
@@ -795,56 +812,22 @@ impl Render for Controls {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .id("shortcuts-only")
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .text_size(px(13.))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.shortcuts_only = !this.shortcuts_only;
-                        if this.shortcuts_only {
-                            this.gamer_mode.store(false, Ordering::Relaxed);
-                            this.clear_overlay(cx);
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(16.))
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(rgba(0xffffff39))
-                            .when(self.shortcuts_only, |el| {
-                                el.bg(rgb(0xdadbea)).text_color(rgb(0x1b1b1b)).child("✓")
-                            }),
-                    )
-                    .child(self.text(if cfg!(target_os = "windows") {
-                        "Only show Ctrl, Alt or Windows shortcuts"
-                    } else {
-                        "Only show Ctrl, Alt or Super shortcuts"
-                    })),
-            )
-            .child(
-                button(
-                    "gamer-mode",
-                    self.text("Gamer Mode"),
-                    self.gamer_mode.load(Ordering::Relaxed),
-                )
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    let was_enabled = this.gamer_mode.fetch_xor(true, Ordering::Relaxed);
-                    if !was_enabled {
-                        this.shortcuts_only = false;
-                    }
-                    this.clear_overlay(cx);
-                    cx.notify();
-                })),
-            )
+            .child(div().flex().flex_wrap().gap(px(5.)).children(modes.map(
+                |(id, label, selected)| {
+                    button(id, self.text(label), selected)
+                        .flex_1()
+                        .justify_center()
+                        .px(px(8.))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if !selected {
+                                this.shortcuts_only = id == "shortcuts-only";
+                                this.gamer_mode.store(id == "gamer-mode", Ordering::Relaxed);
+                                this.clear_overlay(cx);
+                                cx.notify();
+                            }
+                        }))
+                },
+            )))
             .child(self.position_picker(cx))
             .child(self.fade_delay_control(cx))
             .child(self.super_key_control(cx))
@@ -853,6 +836,7 @@ impl Render for Controls {
                     .flex()
                     .items_center()
                     .gap(px(7.))
+                    .flex_wrap()
                     .child(
                         button(
                             "capture",
@@ -868,8 +852,64 @@ impl Render for Controls {
                     .child(
                         button("preview", self.text("Preview"), false)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.preview(cx))),
+                    )
+                    .child(
+                        button("help", self.text("Keyboard shortcuts"), self.help).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_help(cx)),
+                        ),
                     ),
             )
+            .when(self.help, |body| {
+                let shortcuts = [
+                    ("Space", "Start or pause capture"),
+                    ("P", "Choose overlay position"),
+                    ("[ / ]", "Adjust fade delay"),
+                    ("Q", "Quit"),
+                    ("?", "Show keyboard shortcuts"),
+                ];
+                body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(7.))
+                        .p(px(10.))
+                        .rounded(px(9.))
+                        .border_1()
+                        .border_color(rgba(EDGE))
+                        .children(shortcuts.map(|(key, description)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .text_size(px(13.))
+                                .child(
+                                    div()
+                                        .w(px(100.))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .gap(px(4.))
+                                        .children(key.split(" / ").map(|key| {
+                                            div()
+                                                .min_w(px(24.))
+                                                .px(px(6.))
+                                                .rounded(px(5.))
+                                                .border_1()
+                                                .border_color(rgba(EDGE))
+                                                .bg(rgb(0x353536))
+                                                .line_height(px(22.))
+                                                .text_center()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(if key == "Space" {
+                                                    self.text("Space")
+                                                } else {
+                                                    key.to_owned()
+                                                })
+                                        })),
+                                )
+                                .child(div().text_color(rgb(MUTED)).child(self.text(description)))
+                        })),
+                )
+            })
             .child(self.update_control(cx));
 
         let window = div()
@@ -883,9 +923,7 @@ impl Render for Controls {
             .on_action(cx.listener(|this, _: &LongerDelay, _, cx| this.adjust_delay(true, cx)))
             .on_key_down(cx.listener(Self::position_key))
             .on_action(cx.listener(|this, _: &ShowHelp, _, cx| {
-                this.pending_position = None;
-                this.help = !this.help;
-                cx.notify();
+                this.toggle_help(cx);
             }))
             .on_action(|_: &Quit, _, cx| cx.quit())
             .size_full()
