@@ -276,6 +276,27 @@ impl Overlay {
         });
     }
 
+    fn gamer_cards(&self, visible_slots: usize) -> Vec<(usize, &Card)> {
+        let mut cards: Vec<_> = self
+            .cards
+            .iter()
+            .filter_map(|card| card.game_key.as_ref().map(|key| (key.slot, card)))
+            .collect();
+
+        if visible_slots < usize::from(self.appearance.max_cards) {
+            cards.sort_by_key(|&(slot, card)| {
+                (std::cmp::Reverse((card.held(), card.last_key)), slot)
+            });
+            cards.truncate(visible_slots);
+            cards.sort_by_key(|&(slot, _)| slot);
+            // Compact display slots without changing the slots tracked by capture.
+            for (index, (slot, _)) in cards.iter_mut().enumerate() {
+                *slot = index;
+            }
+        }
+        cards
+    }
+
     fn restack(&mut self, now: Instant) {
         for (index, card) in self.cards.iter_mut().enumerate() {
             let row = index as f32 * (CARD_HEIGHT + f32::from(self.appearance.spacing));
@@ -340,14 +361,16 @@ impl Render for Overlay {
             1 => SURFACE_WIDTH - CARD_WIDTH - GUTTER,
             _ => (SURFACE_WIDTH - CARD_WIDTH) / 2.,
         };
-        let cards = self.cards.iter().enumerate().filter(|(index, card)| {
-            card.game_key.as_ref().map_or(*index, |key| key.slot) < visible_slots
-        });
+        let cards = if self.gamer_mode {
+            self.gamer_cards(visible_slots)
+        } else {
+            self.cards.iter().take(visible_slots).enumerate().collect()
+        };
         div()
             .relative()
             .size_full()
             .overflow_hidden()
-            .children(cards.rev().map(|(_, card)| {
+            .children(cards.into_iter().rev().map(|(slot, card)| {
                 if let Some(key) = &card.game_key {
                     let left = match horizontal {
                         -1 => GUTTER,
@@ -355,7 +378,7 @@ impl Render for Overlay {
                         _ => (SURFACE_WIDTH - GAME_SLOT_WIDTH) / 2.,
                     };
                     let offset = GUTTER
-                        + key.slot as f32 * (GAME_CAP_HEIGHT + f32::from(self.appearance.spacing));
+                        + slot as f32 * (GAME_CAP_HEIGHT + f32::from(self.appearance.spacing));
                     let top = if self.position.is_bottom() {
                         height - GAME_CAP_HEIGHT - offset
                     } else {
@@ -1267,6 +1290,43 @@ mod tests {
         assert!(!overlay.cards[0].held());
         assert!(overlay.cards[0].is_visible(faded + delay, delay));
         assert!(!overlay.cards[0].is_visible(faded + delay + EXIT, delay));
+    }
+
+    #[test]
+    fn short_gamer_stack_shows_held_keys_from_higher_slots() {
+        let now = Instant::now();
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
+        overlay.gamer_mode = true;
+        overlay.push(
+            Stroke::GamePress {
+                code: 1,
+                label: "W".into(),
+            },
+            now,
+        );
+        overlay.push(
+            Stroke::GamePress {
+                code: 2,
+                label: "Shift".into(),
+            },
+            now,
+        );
+        overlay.push(
+            Stroke::GameRelease { code: 1 },
+            now + Duration::from_millis(1),
+        );
+
+        let visible = overlay.gamer_cards(1);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].0, 0);
+        assert_eq!(visible[0].1.game_key.as_ref().unwrap().code, 2);
+
+        let later = now + Duration::from_millis(1) + TEST_DELAY + EXIT;
+        overlay
+            .cards
+            .retain(|card| card.is_visible(later, TEST_DELAY));
+        assert_eq!(overlay.gamer_cards(1)[0].0, 0);
+        assert_eq!(overlay.gamer_cards(4)[0].0, 1);
     }
 
     #[test]
