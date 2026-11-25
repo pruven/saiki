@@ -24,6 +24,7 @@ pub enum CaptureError {
     Overlay,
     Position,
     FadeDelay,
+    Appearance,
     SuperKeyStyle,
 }
 
@@ -43,6 +44,7 @@ impl CaptureError {
             #[cfg(target_os = "linux")]
             Self::Overlay => "This Wayland compositor needs layer-shell support.",
             Self::Position => "Could not save the overlay position.",
+            Self::Appearance => "Could not save the appearance settings.",
             Self::FadeDelay => "Could not save the fade delay.",
             Self::SuperKeyStyle => "Could not save the Super key display setting.",
         }

@@ -221,6 +221,75 @@ impl SuperKeyStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Appearance {
+    pub font_size: u8,
+    pub opacity: u8,
+    pub spacing: u8,
+    pub max_cards: u8,
+    pub palette: u8,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            font_size: 17,
+            opacity: 100,
+            spacing: 7,
+            max_cards: 4,
+            palette: 0,
+        }
+    }
+}
+
+impl Appearance {
+    pub const FONT_SIZE: std::ops::RangeInclusive<u8> = 12..=24;
+    pub const OPACITY: std::ops::RangeInclusive<u8> = 25..=100;
+    pub const SPACING: std::ops::RangeInclusive<u8> = 0..=19;
+    pub const MAX_CARDS: u8 = 6;
+    pub const PALETTES: [&str; 4] = ["Default", "Light", "Ocean", "Plum"];
+
+    pub fn load() -> Self {
+        let saved = path("appearance.json")
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+            .unwrap_or_default();
+        let defaults = Self::default();
+        let read = |key: &str, range: std::ops::RangeInclusive<u8>, default| {
+            saved[key]
+                .as_u64()
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|value| range.contains(value))
+                .unwrap_or(default)
+        };
+        Self {
+            font_size: read("font_size", Self::FONT_SIZE, defaults.font_size),
+            opacity: read("opacity", Self::OPACITY, defaults.opacity),
+            spacing: read("spacing", Self::SPACING, defaults.spacing),
+            max_cards: read("max_cards", 1..=Self::MAX_CARDS, defaults.max_cards),
+            palette: read(
+                "palette",
+                0..=(Self::PALETTES.len() - 1) as u8,
+                defaults.palette,
+            ),
+        }
+    }
+
+    pub fn save(self) -> io::Result<()> {
+        save(
+            "appearance.json",
+            &serde_json::json!({
+                "font_size": self.font_size,
+                "opacity": self.opacity,
+                "spacing": self.spacing,
+                "max_cards": self.max_cards,
+                "palette": self.palette,
+            })
+            .to_string(),
+        )
+    }
+}
+
 fn path(name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let dir = env::var_os("APPDATA").map(PathBuf::from)?;

@@ -1,5 +1,5 @@
 use crate::capture::{MOUSE_BUTTON_BASE, SUPER_KEY, Stroke};
-use crate::settings::{Position, SuperKeyStyle};
+use crate::settings::{Appearance, Position, SuperKeyStyle};
 #[cfg(target_os = "linux")]
 use gpui::layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::prelude::*;
@@ -11,13 +11,10 @@ use std::time::{Duration, Instant};
 
 const CARD_WIDTH: f32 = 340.;
 const CARD_HEIGHT: f32 = 50.;
-const CARD_GAP: f32 = 7.;
 const GUTTER: f32 = 18.;
 const SURFACE_WIDTH: f32 = CARD_WIDTH + GUTTER + 44.;
-const MAX_CARDS: usize = 4;
 const GAME_SLOT_WIDTH: f32 = 82.;
 const GAME_CAP_HEIGHT: f32 = 42.;
-const SURFACE_HEIGHT: f32 = GUTTER + MAX_CARDS as f32 * (CARD_HEIGHT + CARD_GAP) + 34.;
 const ENTER: Duration = Duration::from_millis(360);
 const EXIT: Duration = Duration::from_millis(180);
 
@@ -25,6 +22,10 @@ pub const TEXT: u32 = 0xf7f7f7;
 pub const MUTED: u32 = 0xb1b1b5;
 pub const SURFACE: u32 = 0x262626;
 pub const EDGE: u32 = 0xffffff17;
+
+pub fn surface_height(appearance: Appearance) -> f32 {
+    GUTTER + f32::from(appearance.max_cards) * (CARD_HEIGHT + f32::from(appearance.spacing)) + 34.
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Content {
@@ -73,6 +74,7 @@ pub struct Overlay {
     position: Position,
     delay: Duration,
     super_key_style: SuperKeyStyle,
+    appearance: Appearance,
     cards: Vec<Card>,
     gamer_mode: bool,
     wake_at: Option<Instant>,
@@ -85,6 +87,7 @@ impl Overlay {
             position,
             delay,
             super_key_style,
+            appearance: Appearance::default(),
             cards: Vec::new(),
             gamer_mode: false,
             wake_at: None,
@@ -99,6 +102,18 @@ impl Overlay {
 
     pub fn set_super_key_style(&mut self, style: SuperKeyStyle, cx: &mut Context<Self>) {
         self.super_key_style = style;
+        cx.notify();
+    }
+
+    pub fn set_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        self.appearance = appearance;
+        let limit = usize::from(appearance.max_cards);
+        if self.gamer_mode {
+            self.cards
+                .retain(|card| card.game_key.as_ref().is_some_and(|key| key.slot < limit));
+        } else {
+            self.cards.truncate(limit);
+        }
         cx.notify();
     }
 
@@ -193,7 +208,8 @@ impl Overlay {
             Stroke::Key { caps, .. } => Content::Key(caps),
             Stroke::GamePress { .. } | Stroke::GameRelease { .. } => unreachable!(),
         };
-        self.cards.truncate(MAX_CARDS - 1);
+        self.cards
+            .truncate(usize::from(self.appearance.max_cards) - 1);
         self.cards.insert(
             0,
             Card {
@@ -220,7 +236,7 @@ impl Overlay {
             }
         }
 
-        let free_slot = (0..MAX_CARDS).find(|slot| {
+        let free_slot = (0..usize::from(self.appearance.max_cards)).find(|slot| {
             !self
                 .cards
                 .iter()
@@ -262,7 +278,7 @@ impl Overlay {
 
     fn restack(&mut self, now: Instant) {
         for (index, card) in self.cards.iter_mut().enumerate() {
-            let row = index as f32 * (CARD_HEIGHT + CARD_GAP);
+            let row = index as f32 * (CARD_HEIGHT + f32::from(self.appearance.spacing));
             if card.row != row {
                 card.from = card.y(now);
                 card.row = row;
@@ -310,6 +326,7 @@ impl Render for Overlay {
             });
         }
 
+        let opacity = f32::from(self.appearance.opacity) / 100.;
         let horizontal = self.position.horizontal();
         let left = match horizontal {
             -1 => GUTTER,
@@ -327,9 +344,10 @@ impl Render for Overlay {
                         1 => SURFACE_WIDTH - GUTTER - GAME_SLOT_WIDTH,
                         _ => (SURFACE_WIDTH - GAME_SLOT_WIDTH) / 2.,
                     };
-                    let offset = GUTTER + key.slot as f32 * (GAME_CAP_HEIGHT + CARD_GAP);
+                    let offset = GUTTER
+                        + key.slot as f32 * (GAME_CAP_HEIGHT + f32::from(self.appearance.spacing));
                     let top = if self.position.is_bottom() {
-                        SURFACE_HEIGHT - GAME_CAP_HEIGHT - offset
+                        surface_height(self.appearance) - GAME_CAP_HEIGHT - offset
                     } else {
                         offset
                     };
@@ -349,8 +367,13 @@ impl Render for Overlay {
                         .flex()
                         .when(horizontal == 1, |row| row.justify_end())
                         .when(horizontal == 0, |row| row.justify_center())
-                        .opacity(1. - exit)
-                        .child(game_cap(&card.content, self.super_key_style, key));
+                        .opacity(opacity * (1. - exit))
+                        .child(game_cap(
+                            &card.content,
+                            self.super_key_style,
+                            key,
+                            self.appearance,
+                        ));
                 }
                 let enter = progress(now - card.born, ENTER);
                 let exit = progress(
@@ -361,7 +384,7 @@ impl Render for Overlay {
                 let vertical_slide = if horizontal == 0 { slide / 2. } else { 0. };
                 let offset = GUTTER + card.y(now) - vertical_slide;
                 let y = if self.position.is_bottom() {
-                    SURFACE_HEIGHT - CARD_HEIGHT - offset
+                    surface_height(self.appearance) - CARD_HEIGHT - offset
                 } else {
                     offset
                 };
@@ -373,11 +396,12 @@ impl Render for Overlay {
                     .flex()
                     .when(horizontal == 1, |row| row.justify_end())
                     .when(horizontal == 0, |row| row.justify_center())
-                    .opacity((enter * 2.7).min(1.) * (1. - exit))
+                    .opacity(opacity * (enter * 2.7).min(1.) * (1. - exit))
                     .child(card_view(
                         &card.content,
                         self.super_key_style,
                         card.shortcut_presses,
+                        self.appearance,
                     ))
             }))
     }
@@ -393,6 +417,7 @@ pub fn show(
     position: Position,
     delay: Duration,
     super_key_style: SuperKeyStyle,
+    appearance: Appearance,
     gamer_mode: bool,
     strokes: impl IntoIterator<Item = Stroke>,
 ) -> anyhow::Result<()> {
@@ -415,7 +440,14 @@ pub fn show(
             cx.notify();
         });
     }
-    *overlay = Some(open(cx, position, delay, super_key_style, populate)?);
+    *overlay = Some(open(
+        cx,
+        position,
+        delay,
+        super_key_style,
+        appearance,
+        populate,
+    )?);
     Ok(())
 }
 
@@ -427,25 +459,35 @@ pub fn relocate(
     let Some(handle) = overlay.take() else {
         return Ok(());
     };
-    let Ok((cards, delay, super_key_style, gamer_mode)) = handle.update(cx, |view, window, _| {
-        window.remove_window();
-        (
-            std::mem::take(&mut view.cards),
-            view.delay,
-            view.super_key_style,
-            view.gamer_mode,
-        )
-    }) else {
+    let Ok((cards, delay, super_key_style, appearance, gamer_mode)) =
+        handle.update(cx, |view, window, _| {
+            window.remove_window();
+            (
+                std::mem::take(&mut view.cards),
+                view.delay,
+                view.super_key_style,
+                view.appearance,
+                view.gamer_mode,
+            )
+        })
+    else {
         return Ok(());
     };
     if cards
         .iter()
         .any(|card| card.is_visible(Instant::now(), delay))
     {
-        *overlay = Some(open(cx, position, delay, super_key_style, |view| {
-            view.cards = cards;
-            view.gamer_mode = gamer_mode;
-        })?);
+        *overlay = Some(open(
+            cx,
+            position,
+            delay,
+            super_key_style,
+            appearance,
+            |view| {
+                view.cards = cards;
+                view.gamer_mode = gamer_mode;
+            },
+        )?);
     }
     Ok(())
 }
@@ -455,8 +497,10 @@ fn open(
     position: Position,
     delay: Duration,
     super_key_style: SuperKeyStyle,
+    appearance: Appearance,
     populate: impl FnOnce(&mut Overlay),
 ) -> anyhow::Result<WindowHandle<Overlay>> {
+    let height = surface_height(appearance);
     #[cfg(target_os = "linux")]
     let display = matches!(position, Position::Custom { .. })
         .then(|| placement_display(cx))
@@ -466,7 +510,7 @@ fn open(
         (Position::Custom { x, y }, Some(display)) => {
             let screen = display.bounds().size;
             let left = placement_offset(f32::from(screen.width) - SURFACE_WIDTH, x);
-            let top = custom_surface_top(f32::from(screen.height), y, 1.);
+            let top = custom_surface_top(f32::from(screen.height), y, 1., height);
             Some((px(top), px(0.), px(0.), px(left)))
         }
         _ => None,
@@ -476,7 +520,7 @@ fn open(
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(0.), px(0.)),
-                size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)),
+                size(px(SURFACE_WIDTH), px(height)),
             ))),
             #[cfg(target_os = "windows")]
             kind: WindowKind::PopUp,
@@ -506,6 +550,7 @@ fn open(
             _window.set_input_region(Some(&[]));
             cx.new(|_| {
                 let mut view = Overlay::new(position, delay, super_key_style);
+                view.appearance = appearance;
                 populate(&mut view);
                 view
             })
@@ -513,7 +558,7 @@ fn open(
     )?;
     #[cfg(target_os = "windows")]
     if let Err(error) = handle.update(cx, |_, window, _| {
-        configure_windows_overlay(window, Some(position))
+        configure_windows_overlay(window, Some((position, height)))
     })? {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
         return Err(error);
@@ -538,6 +583,7 @@ pub struct PlacementEditor {
     grab_offset: Option<PlacementPoint>,
     focus: gpui::FocusHandle,
     super_key_style: SuperKeyStyle,
+    appearance: Appearance,
     save: Box<dyn Fn(Position, &mut App) -> bool>,
     drag_label: String,
     save_label: String,
@@ -550,6 +596,7 @@ pub fn edit_placement(
     cx: &mut App,
     position: Position,
     super_key_style: SuperKeyStyle,
+    appearance: Appearance,
     [drag_label, save_label, cancel_label, error_label]: [String; 4],
     save: impl Fn(Position, &mut App) -> bool + 'static,
 ) -> anyhow::Result<WindowHandle<PlacementEditor>> {
@@ -592,6 +639,7 @@ pub fn edit_placement(
                     grab_offset: None,
                     focus,
                     super_key_style,
+                    appearance,
                     save: Box::new(save),
                     drag_label,
                     save_label,
@@ -627,11 +675,15 @@ impl Render for PlacementEditor {
         use gpui::{ClickEvent, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent};
 
         let viewport = window.viewport_size();
+        let height = surface_height(self.appearance);
         let available = viewport - size(px(SURFACE_WIDTH), px(CARD_HEIGHT + 2. * GUTTER));
         let (x, y) = self.coordinates;
         let origin = point(
             px(placement_offset(f32::from(available.width), x)),
-            px(custom_surface_top(f32::from(viewport.height), y, 1.) + custom_card_offset(y)),
+            px(
+                custom_surface_top(f32::from(viewport.height), y, 1., height)
+                    + custom_card_offset(y, height),
+            ),
         );
         div()
             .relative()
@@ -668,7 +720,9 @@ impl Render for PlacementEditor {
                     &Content::Key(vec!["Ctrl".into(), "Shift".into(), "P".into()]),
                     self.super_key_style,
                     None,
+                    self.appearance,
                 )
+                .opacity(f32::from(self.appearance.opacity) / 100.)
                 .absolute()
                 .left(origin.x + px((SURFACE_WIDTH - CARD_WIDTH) / 2.))
                 .top(origin.y + px(GUTTER))
@@ -751,17 +805,43 @@ pub fn demo() -> impl IntoIterator<Item = Stroke> {
     .chain([Stroke::Space])
 }
 
-fn game_cap(content: &Content, super_key_style: SuperKeyStyle, key: &GameKey) -> Div {
+fn palette(appearance: Appearance) -> (u32, u32, u32, u32) {
+    match appearance.palette {
+        1 => (0xf1f1f4, 0xd8d8df, 0x202027, 0x484856),
+        2 => (0x122e40, 0x214b62, 0xe7f8ff, 0xa5d7eb),
+        3 => (0x30223c, 0x513760, 0xffefff, 0xe0bddf),
+        _ => (SURFACE, 0x363638, TEXT, MUTED),
+    }
+}
+
+fn game_cap(
+    content: &Content,
+    super_key_style: SuperKeyStyle,
+    key: &GameKey,
+    appearance: Appearance,
+) -> Div {
     let Content::Key(caps) = content else {
         unreachable!("Gamer Mode cards contain one keycap")
     };
     let label = &caps[0];
     let held = key.held;
+    let (surface, cap, text, muted) = palette(appearance);
+    let text = if appearance.palette != 0 {
+        if held { text } else { muted }
+    } else if held {
+        0xf6f0ff
+    } else {
+        0xc1c0cc
+    };
     let mouse_button = key.code.wrapping_sub(MOUSE_BUTTON_BASE);
     let face = if (1..=5).contains(&mouse_button) {
-        mouse_button_icon(mouse_button, held)
+        mouse_button_icon(
+            mouse_button,
+            held,
+            (appearance.palette != 0).then_some(text),
+        )
     } else if label == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon {
-        windows_key_icon()
+        windows_key_icon(text)
     } else {
         div().min_w_0().text_ellipsis().child(label.clone())
     };
@@ -772,7 +852,13 @@ fn game_cap(content: &Content, super_key_style: SuperKeyStyle, key: &GameKey) ->
         .p(px(2.))
         .pb(px(5.))
         .rounded(px(10.))
-        .bg(rgb(if held { 0x533ea3 } else { 0x101015 }))
+        .bg(rgb(if appearance.palette != 0 {
+            surface
+        } else if held {
+            0x533ea3
+        } else {
+            0x101015
+        }))
         .border_1()
         .border_color(rgb(if held { 0xb7a4ff } else { 0x41414e }))
         .shadow(vec![
@@ -792,17 +878,23 @@ fn game_cap(content: &Content, super_key_style: SuperKeyStyle, key: &GameKey) ->
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(rgb(if held { 0x312453 } else { 0x23232d }))
-                .text_color(rgb(if held { 0xf6f0ff } else { 0xc1c0cc }))
+                .bg(rgb(if appearance.palette != 0 {
+                    cap
+                } else if held {
+                    0x312453
+                } else {
+                    0x23232d
+                }))
+                .text_color(rgb(text))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_size(px(14.))
+                .text_size(px(f32::from(appearance.font_size) - 3.))
                 .child(face),
         )
 }
 
-fn mouse_button_icon(button: u32, held: bool) -> Div {
-    let outline = rgb(if held { 0xdbcfff } else { 0xaaa6b8 });
-    let active = rgb(if held { 0xdccaff } else { 0xb3a7d2 });
+fn mouse_button_icon(button: u32, held: bool, foreground: Option<u32>) -> Div {
+    let outline = rgb(foreground.unwrap_or(if held { 0xdbcfff } else { 0xaaa6b8 }));
+    let active = rgb(foreground.unwrap_or(if held { 0xdccaff } else { 0xb3a7d2 }));
     div()
         .relative()
         .w(px(22.))
@@ -861,11 +953,14 @@ fn card_view(
     content: &Content,
     super_key_style: SuperKeyStyle,
     shortcut_presses: Option<usize>,
+    appearance: Appearance,
 ) -> Div {
+    let (surface, keycap, foreground, muted) = palette(appearance);
+    let font_size = f32::from(appearance.font_size);
     let keys = match content {
         Content::Word { text, .. } => div()
-            .text_color(rgb(TEXT))
-            .text_size(px(17.))
+            .text_color(rgb(foreground))
+            .text_size(px(font_size))
             .font_weight(FontWeight::SEMIBOLD)
             .line_height(px(26.))
             .text_ellipsis_start()
@@ -878,7 +973,7 @@ fn card_view(
                 .children(caps.iter().cloned().map(|cap| {
                     let label = if cap == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon
                     {
-                        windows_key_icon()
+                        windows_key_icon(foreground)
                     } else {
                         div().text_ellipsis().child(cap)
                     };
@@ -891,12 +986,12 @@ fn card_view(
                         .max_w(px(115.))
                         .px(px(8.))
                         .rounded(px(7.))
-                        .bg(rgb(0x363638))
+                        .bg(rgb(keycap))
                         .border_1()
                         .border_color(rgba(0xffffff12))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(foreground))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_size(px(13.))
+                        .text_size(px(font_size - 4.))
                         .child(label)
                 }))
         }
@@ -908,7 +1003,7 @@ fn card_view(
         .flex()
         .items_center()
         .rounded(px(16.))
-        .bg(rgb(SURFACE))
+        .bg(rgb(surface))
         .border_1()
         .border_color(rgba(EDGE))
         .shadow(vec![
@@ -922,15 +1017,15 @@ fn card_view(
                 card.gap(px(8.)).child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(MUTED))
-                        .text_size(px(13.))
+                        .text_color(rgb(muted))
+                        .text_size(px(font_size - 4.))
                         .child(format!("×{presses}")),
                 )
             },
         )
 }
 
-fn windows_key_icon() -> Div {
+fn windows_key_icon(text: u32) -> Div {
     div()
         .flex()
         .flex_col()
@@ -939,23 +1034,23 @@ fn windows_key_icon() -> Div {
             div()
                 .flex()
                 .gap(px(1.))
-                .children((0..2).map(|_| div().size(px(5.)).bg(rgb(TEXT))))
+                .children((0..2).map(|_| div().size(px(5.)).bg(rgb(text))))
         }))
 }
 
-fn custom_card_offset(y: u16) -> f32 {
+fn custom_card_offset(y: u16, surface_height: f32) -> f32 {
     if y >= 500 {
-        SURFACE_HEIGHT - CARD_HEIGHT - 2. * GUTTER
+        surface_height - CARD_HEIGHT - 2. * GUTTER
     } else {
         0.
     }
 }
 
-fn custom_surface_top(height: f32, y: u16, scale: f32) -> f32 {
+fn custom_surface_top(height: f32, y: u16, scale: f32, surface_height: f32) -> f32 {
     let available = height - (CARD_HEIGHT + 2. * GUTTER) * scale;
-    (placement_offset(available, y) - custom_card_offset(y) * scale)
+    (placement_offset(available, y) - custom_card_offset(y, surface_height) * scale)
         .round()
-        .clamp(0., (height - SURFACE_HEIGHT * scale).max(0.))
+        .clamp(0., (height - surface_height * scale).max(0.))
 }
 
 fn placement_offset(remaining: f32, position: u16) -> f32 {
@@ -967,13 +1062,16 @@ fn windows_overlay_bounds(
     position: Position,
     work_area: Bounds<gpui::DevicePixels>,
     scale: f32,
+    height: f32,
 ) -> Bounds<gpui::DevicePixels> {
-    let surface = size(px(SURFACE_WIDTH), px(SURFACE_HEIGHT)).to_device_pixels(scale);
+    let surface = size(px(SURFACE_WIDTH), px(height)).to_device_pixels(scale);
     let remaining = work_area.size - surface;
     if let Position::Custom { x, y } = position {
         let offset = point(
             gpui::DevicePixels(placement_offset(remaining.width.0 as f32, x) as i32),
-            gpui::DevicePixels(custom_surface_top(work_area.size.height.0 as f32, y, scale) as i32),
+            gpui::DevicePixels(
+                custom_surface_top(work_area.size.height.0 as f32, y, scale, height) as i32,
+            ),
         );
         return Bounds::new(work_area.origin + offset, surface);
     }
@@ -991,7 +1089,10 @@ fn windows_overlay_bounds(
 }
 
 #[cfg(target_os = "windows")]
-fn configure_windows_overlay(window: &Window, position: Option<Position>) -> anyhow::Result<()> {
+fn configure_windows_overlay(
+    window: &Window,
+    position: Option<(Position, f32)>,
+) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::{COLORREF, ERROR_SUCCESS, GetLastError, HWND, POINT, SetLastError},
@@ -1035,11 +1136,12 @@ fn configure_windows_overlay(window: &Window, position: Option<Position>) -> any
                 DevicePixels(work.bottom - work.top),
             ),
         );
-        let bounds = position.map_or(work_area, |position| {
+        let bounds = position.map_or(work_area, |(position, height)| {
             windows_overlay_bounds(
                 position,
                 work_area,
                 dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32,
+                height,
             )
         });
 
@@ -1139,14 +1241,15 @@ mod tests {
     #[test]
     fn custom_placement_keeps_the_card_at_the_dragged_height() {
         let height = 1080.;
+        let surface_height = surface_height(Appearance::default());
         let available = px(height - CARD_HEIGHT - 2. * GUTTER);
         for y in [0, 250, 499, 500, 750, 1000] {
-            let top = custom_surface_top(height, y, 1.);
-            let card_offset = top + custom_card_offset(y);
+            let top = custom_surface_top(height, y, 1., surface_height);
+            let card_offset = top + custom_card_offset(y, surface_height);
             assert_eq!(card_offset, placement_offset(f32::from(available), y));
             let dragged = placement_coordinate(px(card_offset), available, 0);
             assert_eq!(placement_offset(f32::from(available), dragged), card_offset);
-            assert!(top >= 0. && top + SURFACE_HEIGHT <= height);
+            assert!(top >= 0. && top + surface_height <= height);
         }
         assert_eq!(placement_coordinate(px(-50.), available, 500), 0);
         assert_eq!(placement_coordinate(px(height), available, 500), 1000);
@@ -1169,7 +1272,12 @@ mod tests {
             (Position::BottomRight, 1317, 612),
             (Position::Custom { x: 250, y: 750 }, 377, 394),
         ] {
-            let bounds = windows_overlay_bounds(position, work_area, 1.5);
+            let bounds = windows_overlay_bounds(
+                position,
+                work_area,
+                1.5,
+                surface_height(Appearance::default()),
+            );
             assert_eq!(
                 bounds.origin,
                 point(DevicePixels(x), DevicePixels(y)),
@@ -1315,7 +1423,43 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, ["7", "6", "5", "4"]);
-        assert_eq!(overlay.cards[3].row, 3. * (CARD_HEIGHT + CARD_GAP));
+        assert_eq!(
+            overlay.cards[3].row,
+            3. * (CARD_HEIGHT + f32::from(overlay.appearance.spacing))
+        );
         assert!(overlay.cards[0].fade_at(overlay.delay) > overlay.cards[3].fade_at(overlay.delay));
+    }
+    #[test]
+    fn appearance_controls_stack_spacing_and_limits_in_both_modes() {
+        let mut overlay = Overlay::new(Position::TopRight, TEST_DELAY, SuperKeyStyle::Text);
+        overlay.appearance.max_cards = 2;
+        overlay.appearance.spacing = 15;
+        let now = Instant::now();
+
+        for n in 0..3 {
+            overlay.push(
+                Stroke::Key {
+                    caps: vec![n.to_string()],
+                    shortcut: false,
+                },
+                now,
+            );
+        }
+        assert_eq!(overlay.cards.len(), 2);
+        assert_eq!(overlay.cards[1].row, CARD_HEIGHT + 15.);
+
+        overlay.cards.clear();
+        overlay.gamer_mode = true;
+        for code in 0..3 {
+            overlay.push(
+                Stroke::GamePress {
+                    code,
+                    label: code.to_string(),
+                },
+                now,
+            );
+        }
+        assert_eq!(overlay.cards.len(), 2);
+        assert_eq!(overlay.cards[1].game_key.as_ref().unwrap().slot, 1);
     }
 }
