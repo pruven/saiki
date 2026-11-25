@@ -466,24 +466,26 @@ impl Controls {
     }
 
     fn apply_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
-        if appearance == self.appearance {
+        if appearance == self.appearance && self.error != Some(CaptureError::Appearance) {
             return;
         }
-        if appearance.save().is_err() {
+        let resize =
+            overlay::surface_height(self.appearance) != overlay::surface_height(appearance);
+        self.appearance = appearance;
+        let save_failed = appearance.save().is_err();
+        if save_failed {
             self.error = Some(CaptureError::Appearance);
-        } else {
-            let resize =
-                overlay::surface_height(self.appearance) != overlay::surface_height(appearance);
-            self.appearance = appearance;
-            if self.error == Some(CaptureError::Appearance) {
-                self.error = None;
-            }
-            if let Some(overlay) = self.overlay {
-                let _ = overlay.update(cx, |view, _, cx| view.set_appearance(appearance, cx));
-            }
-            if resize && overlay::relocate(cx, &mut self.overlay, self.position).is_err() {
-                self.error = Some(CaptureError::Overlay);
-            }
+        } else if self.error == Some(CaptureError::Appearance) {
+            self.error = None;
+        }
+        if let Some(overlay) = self.overlay {
+            let _ = overlay.update(cx, |view, _, cx| view.set_appearance(appearance, cx));
+        }
+        if resize
+            && overlay::relocate(cx, &mut self.overlay, self.position).is_err()
+            && !save_failed
+        {
+            self.error = Some(CaptureError::Overlay);
         }
         cx.notify();
     }

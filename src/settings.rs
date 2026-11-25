@@ -3,7 +3,7 @@ use gpui::layer_shell::Anchor;
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -250,10 +250,18 @@ impl Appearance {
     pub const PALETTES: [&str; 4] = ["Default", "Light", "Ocean", "Plum"];
 
     pub fn load() -> Self {
-        let saved = path("appearance.json")
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
-            .unwrap_or_default();
+        path("appearance.json")
+            .as_deref()
+            .map(Self::load_from)
+            .unwrap_or_default()
+    }
+
+    fn load_from(path: &Path) -> Self {
+        Self::decode(&fs::read_to_string(path).unwrap_or_default())
+    }
+
+    fn decode(value: &str) -> Self {
+        let saved: serde_json::Value = serde_json::from_str(value).unwrap_or_default();
         let defaults = Self::default();
         let read = |key: &str, range: std::ops::RangeInclusive<u8>, default| {
             saved[key]
@@ -276,17 +284,18 @@ impl Appearance {
     }
 
     pub fn save(self) -> io::Result<()> {
-        save(
-            "appearance.json",
-            &serde_json::json!({
+        save("appearance.json", &self.encode())
+    }
+
+    fn encode(self) -> String {
+        serde_json::json!({
                 "font_size": self.font_size,
                 "opacity": self.opacity,
                 "spacing": self.spacing,
                 "max_cards": self.max_cards,
                 "palette": self.palette,
-            })
-            .to_string(),
-        )
+        })
+        .to_string()
     }
 }
 
@@ -304,11 +313,15 @@ fn path(name: &str) -> Option<PathBuf> {
 fn save(name: &str, value: &str) -> io::Result<()> {
     let path = path(name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no user config directory"))?;
+    save_at(&path, name, value)
+}
+
+fn save_at(path: &Path, name: &str, value: &str) -> io::Result<()> {
     let directory = path.parent().expect("settings file has a parent directory");
     fs::create_dir_all(directory)?;
     let pending = directory.join(format!(".{name}-{}", std::process::id()));
     let result =
-        fs::write(&pending, format!("{value}\n")).and_then(|()| fs::rename(&pending, &path));
+        fs::write(&pending, format!("{value}\n")).and_then(|()| fs::rename(&pending, path));
     if result.is_err() {
         let _ = fs::remove_file(pending);
     }
@@ -318,6 +331,37 @@ fn save(name: &str, value: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appearance_round_trips_through_the_settings_file() {
+        let appearance = Appearance {
+            font_size: 22,
+            opacity: 65,
+            spacing: 11,
+            max_cards: 5,
+            palette: 3,
+        };
+        let directory = env::temp_dir().join(format!(
+            "saiki-appearance-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join("appearance.json");
+        save_at(&path, "appearance.json", &appearance.encode()).unwrap();
+        let loaded = Appearance::load_from(&path);
+        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(loaded, appearance);
+    }
+
+    #[test]
+    fn invalid_appearance_value_falls_back_without_resetting_valid_values() {
+        let saved = Appearance::decode(r#"{"font_size":99,"opacity":65}"#);
+        assert_eq!(saved.font_size, Appearance::default().font_size);
+        assert_eq!(saved.opacity, 65);
+    }
 
     #[test]
     fn custom_positions_round_trip_and_reject_out_of_range_coordinates() {

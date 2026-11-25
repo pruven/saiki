@@ -326,6 +326,13 @@ impl Render for Overlay {
             });
         }
 
+        let height = surface_height(self.appearance).min(f32::from(window.viewport_size().height));
+        let card_height = if self.gamer_mode {
+            GAME_CAP_HEIGHT
+        } else {
+            CARD_HEIGHT
+        };
+        let visible_slots = visible_slots(height, card_height, self.appearance.spacing);
         let opacity = f32::from(self.appearance.opacity) / 100.;
         let horizontal = self.position.horizontal();
         let left = match horizontal {
@@ -333,11 +340,14 @@ impl Render for Overlay {
             1 => SURFACE_WIDTH - CARD_WIDTH - GUTTER,
             _ => (SURFACE_WIDTH - CARD_WIDTH) / 2.,
         };
+        let cards = self.cards.iter().enumerate().filter(|(index, card)| {
+            card.game_key.as_ref().map_or(*index, |key| key.slot) < visible_slots
+        });
         div()
             .relative()
             .size_full()
             .overflow_hidden()
-            .children(self.cards.iter().rev().map(|card| {
+            .children(cards.rev().map(|(_, card)| {
                 if let Some(key) = &card.game_key {
                     let left = match horizontal {
                         -1 => GUTTER,
@@ -347,7 +357,7 @@ impl Render for Overlay {
                     let offset = GUTTER
                         + key.slot as f32 * (GAME_CAP_HEIGHT + f32::from(self.appearance.spacing));
                     let top = if self.position.is_bottom() {
-                        surface_height(self.appearance) - GAME_CAP_HEIGHT - offset
+                        height - GAME_CAP_HEIGHT - offset
                     } else {
                         offset
                     };
@@ -384,7 +394,7 @@ impl Render for Overlay {
                 let vertical_slide = if horizontal == 0 { slide / 2. } else { 0. };
                 let offset = GUTTER + card.y(now) - vertical_slide;
                 let y = if self.position.is_bottom() {
-                    surface_height(self.appearance) - CARD_HEIGHT - offset
+                    height - CARD_HEIGHT - offset
                 } else {
                     offset
                 };
@@ -405,6 +415,11 @@ impl Render for Overlay {
                     ))
             }))
     }
+}
+
+fn visible_slots(height: f32, card_height: f32, spacing: u8) -> usize {
+    let spacing = f32::from(spacing);
+    ((height - 2. * GUTTER + spacing) / (card_height + spacing)).floor() as usize
 }
 
 fn progress(elapsed: Duration, duration: Duration) -> f32 {
@@ -505,6 +520,20 @@ fn open(
     let display = matches!(position, Position::Custom { .. })
         .then(|| placement_display(cx))
         .flatten();
+    #[cfg(target_os = "linux")]
+    let height = {
+        // For anchored positions the compositor chooses the output. Fit the
+        // shortest available output so that choice remains with the compositor.
+        let usable_height = match &display {
+            Some(display) => Some(display.bounds().size.height),
+            None => cx
+                .displays()
+                .iter()
+                .map(|display| display.visible_bounds().size.height)
+                .min(),
+        };
+        usable_height.map_or(height, |usable| height.min(f32::from(usable)))
+    };
     #[cfg(target_os = "linux")]
     let margin = match (position, &display) {
         (Position::Custom { x, y }, Some(display)) => {
@@ -675,7 +704,7 @@ impl Render for PlacementEditor {
         use gpui::{ClickEvent, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent};
 
         let viewport = window.viewport_size();
-        let height = surface_height(self.appearance);
+        let height = surface_height(self.appearance).min(f32::from(viewport.height));
         let available = viewport - size(px(SURFACE_WIDTH), px(CARD_HEIGHT + 2. * GUTTER));
         let (x, y) = self.coordinates;
         let origin = point(
@@ -841,7 +870,7 @@ fn game_cap(
             (appearance.palette != 0).then_some(text),
         )
     } else if label == SUPER_KEY && super_key_style == SuperKeyStyle::WindowsIcon {
-        windows_key_icon(text)
+        windows_key_icon(if appearance.palette == 0 { TEXT } else { text })
     } else {
         div().min_w_0().text_ellipsis().child(label.clone())
     };
@@ -1064,7 +1093,9 @@ fn windows_overlay_bounds(
     scale: f32,
     height: f32,
 ) -> Bounds<gpui::DevicePixels> {
-    let surface = size(px(SURFACE_WIDTH), px(height)).to_device_pixels(scale);
+    let mut surface = size(px(SURFACE_WIDTH), px(height)).to_device_pixels(scale);
+    surface.height = surface.height.min(work_area.size.height);
+    let height = surface.height.0 as f32 / scale;
     let remaining = work_area.size - surface;
     if let Position::Custom { x, y } = position {
         let offset = point(
@@ -1236,6 +1267,31 @@ mod tests {
         assert!(!overlay.cards[0].held());
         assert!(overlay.cards[0].is_visible(faded + delay, delay));
         assert!(!overlay.cards[0].is_visible(faded + delay + EXIT, delay));
+    }
+
+    #[test]
+    fn short_work_area_keeps_the_overlay_on_screen_and_limits_visible_slots() {
+        use gpui::DevicePixels;
+
+        let appearance = Appearance {
+            max_cards: 6,
+            spacing: 19,
+            ..Appearance::default()
+        };
+        let work_area = Bounds::new(
+            point(DevicePixels(0), DevicePixels(40)),
+            size(DevicePixels(900), DevicePixels(300)),
+        );
+        let bounds = windows_overlay_bounds(
+            Position::BottomRight,
+            work_area,
+            1.5,
+            surface_height(appearance),
+        );
+        assert_eq!(bounds.origin.y, work_area.origin.y);
+        assert_eq!(bounds.size.height, work_area.size.height);
+        assert_eq!(visible_slots(200., CARD_HEIGHT, appearance.spacing), 2);
+        assert_eq!(visible_slots(200., GAME_CAP_HEIGHT, appearance.spacing), 3);
     }
 
     #[test]
