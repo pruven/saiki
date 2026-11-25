@@ -316,10 +316,7 @@ impl Controls {
         } else {
             overlay::demo()
                 .into_iter()
-                .filter(|stroke| {
-                    !self.shortcuts_only
-                        || matches!(stroke, capture::Stroke::Key { shortcut: true, .. })
-                })
+                .filter(|stroke| !self.shortcuts_only || stroke.is_shortcut())
                 .collect()
         };
         if self.layer_shell
